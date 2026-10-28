@@ -1,8 +1,7 @@
 fastapi
-django
 uvicorn
 psycopg2-binary
 httpx
-sqlalhemy
+sqlalchemy
 ruff
 isort
