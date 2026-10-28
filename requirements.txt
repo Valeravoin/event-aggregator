@@ -1,0 +1,8 @@
+fastapi
+django
+uvicorn
+psycopg2-binary
+httpx
+sqlalhemy
+ruff
+isort
