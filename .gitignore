@@ -1,0 +1,36 @@
+# Виртуальное окружение (обязательно!)
+venv/
+.venv/
+env/
+ENV/
+
+# Файлы IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+
+# Питон-кэш
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Локальные настройки и секреты (самое важное!)
+.env
+.env.local
+.DS_Store
+Thumbs.db
+
+# Базы данных (если делаешь локальные SQLite для тестов)
+*.db
+*.sqlite
+
+# Артефакты сборки и логи (если появятся)
+build/
+dist/
+*.egg-info/
+logs/
