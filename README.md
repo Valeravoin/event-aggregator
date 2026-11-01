@@ -4,30 +4,31 @@
 
 ## 🚀 Быстрый старт
 
-### 1. Требования
+## Требования
 - Python 3.10+
 - PostgreSQL (база `event_aggregator` должна быть создана)
 - Локальная установка зависимостей (через `venv`)
 
-### 2. Клонирование и настройка
+## Клонирование и настройка
 
 ```bash
 git clone <ССЫЛКА_НА_ТВОЙ_РЕПОЗИТОРИЙ>
 cd event-aggregator
 
-### 3. Создание виртуального окружения и установка зависимостей
+
+## Создание виртуального окружения и установка зависимостей
 ```bash
 python -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
 
-### 4. Настройка переменных окружения
+### Настройка переменных окружения
 ```bash
 cp .env.example .env
 **Открой файл .env и укажи свой пароль от PostgreSQL:**
 DATABASE_URL=postgresql+psycopg2://postgres:ТВОЙ_ПАРОЛЬ@localhost:5432/event_aggregator
 
-### 5. Запуск сервера
+### Запуск сервера
 ```bash
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 

@@ -1,35 +1,48 @@
 # scheduler.py
-from apscheduler.schedulers.background import BackgroundScheduler
-from sync_runner import run_sync
 import logging
+from apscheduler.schedulers.background import BackgroundScheduler
+from sqlalchemy.orm import Session
+from database import get_db
+from sync_runner import run_sync
 
 logger = logging.getLogger(__name__)
 
-scheduler = BackgroundScheduler()
+def create_scheduler():
+    scheduler = BackgroundScheduler()
 
-def sync_job():
-    """Функция, которую будет запускать планировщик"""
+    def sync_job():
+        """Задача для планировщика: всегда создаёт новую сессию"""
+        logger.info("⏰ Запуск запланированной синхронизации (по расписанию)...")
+        db: Session = next(get_db())
+        try:
+            success = run_sync(db, source_name="scheduled-source")
+            if success:
+                logger.info("✅ Запланированная синхронизация завершена успешно")
+            else:
+                logger.error("❌ Запланированная синхронизация завершилась с ошибкой")
+        except Exception as e:
+            logger.exception("💥 Критическая ошибка в планировщике: %s", e)
+        finally:
+            db.close()  # Обязательно закрываем!
+
+    # 1. РУЧНОЙ ЗАПУСК ПРИ СТАРТЕ (чтобы не ждать 24 часа для теста)
+    logger.info("🚀 Ручной запуск синхронизации при старте сервера...")
+    initial_db: Session = next(get_db())
     try:
-        result = run_sync(source_name="real-api")
-        logger.info(f"Фоновая синхронизация завершена. Результат: {result}")
+        run_sync(initial_db, source_name="scheduled-source")
+        logger.info("✅ Ручная синхронизация при старте завершена.")
     except Exception as e:
-        logger.error(f"Ошибка в фоновой синхронизации: {e}", exc_info=True)
+        logger.exception("💥 Ошибка при ручной синхронизации: %s", e)
+    finally:
+        initial_db.close()
 
-def start_scheduler():
-    # minutes=1 — для теста запускаем каждую минуту. 
-    # Когда убедишься, что всё работает, поменяй на hours=24 (раз в сутки)
+    # 2. ПЛАНИРОВЩИК: каждые 24 часа
     scheduler.add_job(
         sync_job,
         trigger='interval',
         hours=24,
         id='sync_job',
-        replace_existing=True,
-        max_instances=1     # Важно: только один запуск за раз
+        replace_existing=True  # Защита от дублей при перезапуске
     )
-    logger.info("Планировщик запущен: синхронизация будет выполняться каждые 24 часа")
-    scheduler.start()
 
-def stop_scheduler():
-    if scheduler.running:
-        scheduler.shutdown()
-        logger.info("Планировщик остановлен")
+    return scheduler

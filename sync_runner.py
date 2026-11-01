@@ -1,80 +1,162 @@
-# sync_runner.py
-from database import SessionLocal
-from crud import upsert_event
-from sync_crud import get_last_sync, update_last_sync
-from http_client import EventsApiClient
-from datetime import datetime, timezone
 import logging
+from datetime import datetime, timezone
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from models import Event, SyncMetadata
+from http_client import EventsApiClient
 
 logger = logging.getLogger(__name__)
 
-def run_sync(source_name: str = "real-api"):
-    db = SessionLocal()
+
+def get_or_create_sync_record(db: Session, source_name: str) -> SyncMetadata:
+    """Находит запись по source_name или создаёт новую."""
+    stmt = select(SyncMetadata).where(SyncMetadata.source_name == source_name)
+    result = db.execute(stmt)
+    record = result.scalars().first()
+
+    if not record:
+        logger.info(f"🆕 Создаю запись синхронизации для источника: {source_name}")
+        record = SyncMetadata(
+            source_name=source_name,
+            sync_status='idle',
+            events_processed=0,
+            last_event_time=None,
+            last_sync_time=None
+        )
+        db.add(record)
+        db.commit()
+        db.refresh(record)
+
+    return record
+
+
+def run_sync(db: Session, source_name: str = "scheduled-source") -> bool:
+    """
+    Запускает синхронизацию с защитой от повторного запуска и обработкой ошибок API.
+    Возвращает True при успешном завершении (даже если событий 0), False только при критических сбоях БД.
+    """
+    logger.info(f"🚀 Начало синхронизации для источника: {source_name}")
+
     try:
-        # 1. Получаем время последней синхронизации
-        last_time = get_last_sync(db, source_name=source_name)
-        logger.info("Последняя синхронизация: %s", last_time)
+        # 1. Получаем или создаём запись о синхронизации
+        sync_record = get_or_create_sync_record(db, source_name)
 
-        # 2. Инициализируем клиент и запрашиваем события
-        with EventsApiClient(
-            base_url="https://api.example.com",
-            api_key=None,
-        ) as client:
-            new_events = client.fetch_events_since(last_time)
-            logger.info("Получено новых событий: %d", len(new_events))
+        # 2. Защита от повторного запуска
+        if sync_record.sync_status == 'running':
+            logger.warning(f"⚠️ Синхронизация для {source_name} уже выполняется! Пропуск.")
+            return False
 
-        # 3. Обрабатываем каждое событие
-        processed_count = 0
-        error_count = 0
+        # Помечаем как "в процессе"
+        sync_record.sync_status = 'running'
+        sync_record.last_sync_time = datetime.now(timezone.utc)
+        db.commit()
 
-        for ev in new_events:
+        # 3. Создаём клиент с правильными параметрами
+        client = EventsApiClient()
+    
+        logger.debug("✅ HTTP клиент успешно инициализирован")
+
+        # 4. Подготавливаем время для запроса
+        last_event_time = sync_record.last_event_time
+        events_data = []
+
+        if last_event_time:
+            # Важно: last_event_time из БД может быть datetime, isoformat нужен для API
+            since_iso = last_event_time.isoformat()
+            logger.info(f"🌐 Запрос событий у провайдера (since={since_iso})...")
             try:
-                upsert_event(db, ev)
-                processed_count += 1
-                logger.debug("Обработано: %s (id=%s)", ev.get("name"), ev.get("id"))
+                events_data = client.fetch_events_since(since_iso)
             except Exception as e:
-                error_count += 1
-                # ВАЖНО: откатываем только эту конкретную вставку, чтобы не ломать весь скрипт
-                db.rollback() 
-                logger.error("Ошибка при обработке события %s: %s", ev.get("id", "unknown"), e)
-
-        logger.info("Итого: успешно=%d, ошибок=%d", processed_count, error_count)
-
-        # 4. Обновляем метаданные синхронизации
-        if processed_count > 0 or error_count > 0:
-            valid_events = [ev for ev in new_events if ev.get("last_changed_at")]
-            if valid_events:
-                latest_event_time = max(ev["last_changed_at"] for ev in valid_events)
-            else:
-                latest_event_time = datetime.now(timezone.utc)
-
-            sync_status = "success" if error_count == 0 else "partial"
-
-            # Перед обновлением метаданных тоже делаем rollback, если были ошибки, 
-            # чтобы начать чистую транзакцию для update_last_sync
-            db.rollback()
-
-            update_last_sync(
-                db=db,
-                new_time=latest_event_time,
-                source_name=source_name,
-                events_processed=processed_count,
-                sync_status=sync_status,
-            )
-            logger.info("Курсор и счётчик обновлены: status=%s, processed=%d", sync_status, processed_count)
+                logger.warning(f"⚠️ Не удалось получить события с фильтром по времени: {e}. Попробуем полный список.")
+                # Сбрасываем last_event_time, чтобы в следующий раз не повторять ту же ошибку
+                sync_record.last_event_time = None
+                db.commit()
+                # Дальше пойдём в ветку полного запроса
         else:
-            logger.info("Новых событий нет — курсор не обновляем")
+            logger.info("🌐 Запрос полного списка событий (без фильтра по времени)...")
 
-        return {
-            "source": source_name,
-            "processed": processed_count,
-            "errors": error_count,
-            "status": "success" if error_count == 0 and processed_count > 0 else ("success" if processed_count == 0 and error_count == 0 else "partial"),
-        }
+        # Если events_data пустой или мы не смогли сделать фильтр — запрашиваем всё целиком
+        if not events_data:
+            logger.info("🔄 Выполняем полный запрос списка событий...")
+            try:
+                events_data = client.fetch_all_events()
+                if not isinstance(events_data, list):
+                    logger.error("❌ API вернул некорректный формат данных (не список).")
+                    events_data = []
+            except Exception as e:
+                # ГЛАВНОЕ: НЕ делаем raise! Ловим ошибку, логируем и идём дальше с пустым списком
+                logger.exception("💥 Не удалось получить полный список событий (возможно, 401/сеть). Продолжаем с пустым набором.")
+                events_data = []  # Безопасное значение
+
+        processed_count = 0
+        updated_count = 0
+
+        for event_item in events_data:
+            event_id = event_item.get("id")
+            if not event_id:
+                logger.warning("Пропущено событие без ID")
+                continue
+
+            stmt = select(Event).where(Event.id == event_id)
+            existing_event = db.execute(stmt).scalars().first()
+
+            if existing_event:
+                # Обновляем существующее событие
+                existing_event.name = event_item.get("name")
+                existing_event.place_name = event_item.get("place_name")
+                existing_event.city = event_item.get("city")
+                existing_event.address = event_item.get("address")
+                existing_event.event_time = event_item.get("event_time")
+                existing_event.registration_deadline = event_item.get("registration_deadline")
+                existing_event.status = event_item.get("status")
+                existing_event.number_of_visitors = event_item.get("number_of_visitors")
+                existing_event.last_changed_at = datetime.now(timezone.utc)
+                updated_count += 1
+            else:
+                # Создаем новое событие
+                new_event = Event(
+                    id=event_item.get("id"),
+                    name=event_item.get("name"),
+                    place_id=event_item.get("place_id"),
+                    place_name=event_item.get("place_name"),
+                    city=event_item.get("city"),
+                    address=event_item.get("address"),
+                    event_time=event_item.get("event_time"),
+                    registration_deadline=event_item.get("registration_deadline"),
+                    status=event_item.get("status"),
+                    number_of_visitors=event_item.get("number_of_visitors"),
+                    last_changed_at=datetime.now(timezone.utc)
+                )
+                db.add(new_event)
+                processed_count += 1
+
+        db.commit()
+
+        # 5. Обновляем статистику в SyncMetadata
+        latest_event_time = None
+        if events_data:
+            times = [e.get("event_time") for e in events_data if e.get("event_time")]
+            if times:
+                latest_event_time = max(times)
+
+        sync_record.events_processed = processed_count + updated_count
+        sync_record.last_sync_time = datetime.now(timezone.utc)
+        sync_record.last_event_time = latest_event_time
+        sync_record.sync_status = 'idle'
+
+        db.commit()
+
+        logger.info(f"✅ Синхронизация завершена. Новые: {processed_count}, Обновлено: {updated_count}")
+        return True
 
     except Exception as e:
-        logger.exception("Критическая ошибка синхронизации: %s", e)
-        db.rollback()  # Гарантированный откат при любой критической ошибке
-        raise
-    finally:
-        db.close()
+        logger.exception(f"💥 Критическая ошибка при синхронизации (база данных или другое): {e}")
+        try:
+            if 'sync_record' in locals():
+                sync_record.sync_status = 'failed'
+                sync_record.last_sync_time = datetime.now(timezone.utc)
+                db.commit()
+        except Exception:
+            pass
+        return False
