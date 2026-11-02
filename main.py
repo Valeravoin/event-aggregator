@@ -15,6 +15,7 @@ from scheduler import create_scheduler
 from http_client import EventsApiClient # нужен для вызовов к провайдеру
 from settings import EVENTS_PROVIDER_BASE_URL
 import time
+from schemas import TicketRequest 
 
 
 
@@ -143,55 +144,62 @@ def get_available_seats(event_id: str, db: Session = Depends(get_db)):
 
 
 # --- Регистрация (POST /api/tickets) ---
-@app.post("/api/tickets")
+@app.post("/api/tickets", status_code=201)
 def register_ticket(
-    first_name: str,
-    last_name: str,
-    email: str,
-    seat: str,
-    event_id: str,
+    ticket: TicketRequest,          # <-- ГЛАВНОЕ ИЗМЕНЕНИЕ: принимаем JSON-объект целиком
     db: Session = Depends(get_db)
 ):
-    if not all([first_name, last_name, email, seat, event_id]):
-        raise HTTPException(status_code=400, detail="Все поля (first_name, last_name, email, seat, event_id) обязательны")
-
-    event_stmt = select(Event).where(Event.id == event_id)
+    # 1. Проверка существования события
+    event_stmt = select(Event).where(Event.id == ticket.event_id)
     event = db.execute(event_stmt).scalars().first()
+    
     if not event:
         raise HTTPException(status_code=404, detail="Событие не найдено")
     
+    # 2. Проверка статуса (только published)
     if event.status != "published":
-        raise HTTPException(status_code=403, detail="Нельзя регистрироваться на неопубликованное событие")
+        raise HTTPException(
+            status_code=403, 
+            detail=f"Нельзя регистрироваться на неопубликованное событие. Статус: {event.status}"
+        )
     
+    # 3. Проверка дедлайна регистрации
     if event.registration_deadline:
         now_utc = datetime.now(timezone.utc)
         if now_utc > event.registration_deadline:
             raise HTTPException(status_code=403, detail="Срок регистрации истек")
 
-    logger.info(f"🎫 Попытка регистрации места {seat} через провайдера...")
+    logger.info(f"🎫 Попытка регистрации места {ticket.seat} для события {ticket.event_id}...")
+
+    # 4. Вызов внешнего провайдера через твой HTTP-клиент
     result, error = client.register_ticket(
-        event_id=event_id, 
-        seat=seat, 
-        email=email,
-        first_name=first_name,
-        last_name=last_name
+        event_id=ticket.event_id, 
+        seat=ticket.seat, 
+        email=ticket.email,
+        first_name=ticket.first_name,
+        last_name=ticket.last_name
     )
 
+    # 5. Обработка ошибок от провайдера
     if error:
-        status_code = 409 if "already" in error.lower() or "taken" in error.lower() else 400
+        # Если место занято или уже зарегистрировано — 409 Conflict, иначе 400
+        status_code = 409 if ("already" in error.lower() or "taken" in error.lower()) else 400
         raise HTTPException(status_code=status_code, detail=error)
 
+    # Генерируем ticket_id, если провайдер его не вернул
     ticket_id = result.get("ticket_id") or uuid.uuid4()
 
+    # 6. Сохраняем регистрацию в свою БД
     new_reg = Registration(
         ticket_id=ticket_id,
         event_id=event.id,
-        email=email,
-        first_name=first_name,
-        last_name=last_name,
-        seat=seat,
+        email=ticket.email,
+        first_name=ticket.first_name,
+        last_name=ticket.last_name,
+        seat=ticket.seat,
         status="active"
     )
+    
     db.add(new_reg)
     try:
         db.commit()
@@ -201,13 +209,13 @@ def register_ticket(
         logger.error(f"Ошибка сохранения регистрации в БД: {e}")
         raise HTTPException(status_code=500, detail="Не удалось сохранить регистрацию в базе данных")
 
-    logger.info(f"✅ Регистрация сохранена в БД: {ticket_id}")
+    logger.info(f"✅ Регистрация успешно сохранена в БД: {ticket_id}")
     
     return {
         "ticket_id": str(ticket_id),
         "status": "registered",
         "message": "Регистрация успешна",
-        "seat": seat
+        "seat": ticket.seat
     }
 
 # --- Отмена регистрации (DELETE /api/tickets/{ticket_id}) ---
