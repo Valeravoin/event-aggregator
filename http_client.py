@@ -1,7 +1,6 @@
-import os
 import logging
-from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any, Tuple
+import os
+from typing import Any
 
 import httpx
 from dotenv import load_dotenv
@@ -11,7 +10,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 class EventsApiClient:
-    def __init__(self, base_url: Optional[str] = None):
+    def __init__(self, base_url: str | None = None):
         # 1. Получаем ключ
         self.api_key = os.getenv("EVENTS_PROVIDER_API_KEY")
         
@@ -55,7 +54,7 @@ class EventsApiClient:
         )
         logger.debug("✅ HTTP клиент успешно инициализирован")
 
-    def _make_request(self, method: str, endpoint: str, **kwargs) -> Tuple[Optional[Dict], Optional[str]]:
+    def _make_request(self, method: str, endpoint: str, **kwargs) -> tuple[dict | None, str | None]:
         """Вспомогательный метод для всех запросов: GET/POST/DELETE и т.д."""
         try:
             response = self.client.request(method, endpoint, **kwargs)
@@ -69,13 +68,13 @@ class EventsApiClient:
             return data, None
 
         except httpx.RequestError as e:
-            logger.exception(f"💥 Ошибка сети/запроса: {e}")
-            return None, f"Network error: {str(e)}"
+            logger.exception("💥 Ошибка сети/запроса")
+            return None, f"Network error: {e!s}"
         except Exception as e:
-            logger.exception(f"💥 Неожиданная ошибка: {e}")
-            return None, f"Unexpected error: {str(e)}"
+            logger.exception("💥 Неожиданная ошибка")
+            return None, f"Unexpected error: {e!s}"
 
-    def fetch_all_events(self) -> List[Dict[str, Any]]:
+    def fetch_all_events(self) -> list[dict[str, Any]]:
         try:
             logger.info("🚀 Отправка запроса: GET /api/events/")
             data, error = self._make_request("GET", "/api/events/")
@@ -96,11 +95,11 @@ class EventsApiClient:
 
             return []
 
-        except Exception as e:
-            logger.exception(f"💥 Не удалось получить события: {e}")
+        except Exception:
+            logger.exception("💥 Не удалось получить события")
             raise
 
-    def fetch_events_since(self, since_iso: str) -> List[Dict[str, Any]]:
+    def fetch_events_since(self, since_iso: str) -> list[dict[str, Any]]:
         """
         Получает события, созданные после указанной даты.
         
@@ -128,7 +127,7 @@ class EventsApiClient:
     
 
 
-    def get_seats(self, event_id: str) -> Tuple[Optional[Dict], Optional[str]]:
+    def get_seats(self, event_id: str) -> tuple[dict | None, str | None]:
         endpoint = f"/api/events/{event_id}/seats"
         return self._make_request("GET", endpoint)
 
@@ -139,7 +138,7 @@ class EventsApiClient:
         email: str,
         first_name: str,
         last_name: str
-    ) -> Tuple[Optional[Dict], Optional[str]]:
+    ) -> tuple[dict | None, str | None]:
         endpoint = f"/api/events/{event_id}/register"
         payload = {
             "seat": seat,
@@ -153,7 +152,7 @@ class EventsApiClient:
         self,
         event_id: str,
         ticket_id: str
-    ) -> Tuple[Optional[Dict], Optional[str]]:
+    ) -> tuple[dict | None, str | None]:
         endpoint = f"/api/events/{event_id}/unregister"
         payload = {"ticket_id": ticket_id}
         return self._make_request("DELETE", endpoint, json=payload)

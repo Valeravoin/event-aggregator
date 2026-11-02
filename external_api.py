@@ -1,7 +1,8 @@
 # external_api.py
 
-from datetime import datetime, timedelta, timezone  # ✅ Добавил timezone
+from datetime import UTC, datetime, timedelta  # ✅ Добавил timezone
 from uuid import uuid4
+
 
 def fetch_events_since(last_sync_time):
     """
@@ -15,7 +16,7 @@ def fetch_events_since(last_sync_time):
 
     # Helper для создания дат в UTC — чтобы не писать tzinfo каждый раз
     def utc_dt(*args, **kwargs):
-        return datetime(*args, tzinfo=timezone.utc, **kwargs)
+        return datetime(*args, tzinfo=UTC, **kwargs)
 
     # Если это первый запуск (нет времени последней синхронизации) — отдаём тестовые события
     if last_sync_time is None:

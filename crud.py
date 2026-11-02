@@ -1,8 +1,11 @@
 # crud.py
+from datetime import UTC, datetime
 from uuid import UUID
+
 from sqlalchemy import select
+
 from models import Event
-from datetime import datetime, timezone
+
 
 def get_event_by_id(db, event_id: UUID):
     stmt = select(Event).where(Event.id == event_id)
@@ -37,7 +40,6 @@ def upsert_event(db, event_data: dict):
     Если нет — создаём новое.
     """
     # Преобразуем строку id в UUID, если это строка (для тестовых ID)
-    from uuid import UUID as UUIDType
     event_id = event_data["id"]
     if isinstance(event_id, str):
         # Для тестовых строк вроде 'test-event-001' можно оставить как есть,
@@ -58,7 +60,7 @@ def upsert_event(db, event_data: dict):
         existing.address = event_data.get("address")
         existing.registration_deadline = event_data.get("registration_deadline")
         existing.number_of_visitors = event_data.get("number_of_visitors")
-        existing.last_changed_at = event_data.get("last_changed_at") or datetime.now(timezone.utc)
+        existing.last_changed_at = event_data.get("last_changed_at") or datetime.now(UTC)
 
         db.commit()
         db.refresh(existing)

@@ -1,6 +1,8 @@
+from datetime import UTC, datetime, timedelta
+
 from database import SessionLocal
 from sync_crud import get_last_sync, update_last_sync
-from datetime import datetime, timedelta, timezone
+
 
 def main():
     db = SessionLocal()
@@ -14,7 +16,7 @@ def main():
             return
 
         # 2. Готовим тестовое время: "час назад" в UTC
-        test_time = datetime.now(timezone.utc) - timedelta(hours=1)
+        test_time = datetime.now(UTC) - timedelta(hours=1)
 
         # 3. Создаём запись
         log_entry = update_last_sync(

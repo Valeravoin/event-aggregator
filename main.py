@@ -1,23 +1,22 @@
-from fastapi import FastAPI, Depends, HTTPException, status
-from sqlalchemy import select, text, func
-from sqlalchemy.exc import SQLAlchemyError
-from typing import Optional, List, Dict, Any
-from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 import logging
+import time
 import uuid
+from datetime import UTC, datetime
+from typing import Any
+
+from fastapi import Depends, FastAPI, HTTPException
+from sqlalchemy import func, select, text
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
 # --- Импорты проекта ---
 from database import SessionLocal, engine
+from http_client import EventsApiClient  # нужен для вызовов к провайдеру
 from models import Base, Event, Registration, SyncMetadata
-from sync_runner import run_sync
 from scheduler import create_scheduler
-from http_client import EventsApiClient # нужен для вызовов к провайдеру
+from schemas import TicketRequest
 from settings import EVENTS_PROVIDER_BASE_URL
-import time
-from schemas import TicketRequest 
-
-
+from sync_runner import run_sync
 
 _seats_cache = {}  # {event_id: (timestamp, data)}
 CACHE_TTL = 30      # секунд
@@ -62,7 +61,7 @@ def health():
 
 # --- Ручной запуск синхронизации ---
 @app.post("/api/sync/trigger")
-def trigger_sync(db: Session = Depends(get_db)):
+def trigger_sync(db: Session = Depends(get_db)):  # noqa: B008
     success = run_sync(db)
     if success:
         return {"status": "success", "message": "Синхронизация завершена"}
@@ -71,7 +70,7 @@ def trigger_sync(db: Session = Depends(get_db)):
 
 # --- Детали события (GET /api/events/{event_id}) ---
 @app.get("/api/events/{event_id}")
-def get_event_details(event_id: str, db: Session = Depends(get_db)):
+def get_event_details(event_id: str, db: Session = Depends(get_db)):  # noqa: B008
     stmt = select(Event).where(Event.id == event_id)
     result = db.execute(stmt)
     event = result.scalars().first()
@@ -103,7 +102,7 @@ def get_event_details(event_id: str, db: Session = Depends(get_db)):
 
 # --- Свободные места (GET /api/events/{event_id}/seats) ---
 @app.get("/api/events/{event_id}/seats")
-def get_available_seats(event_id: str, db: Session = Depends(get_db)):
+def get_available_seats(event_id: str, db: Session = Depends(get_db)):  # noqa: B008
     now = time.time()
     
     # Проверка кэша
@@ -147,7 +146,7 @@ def get_available_seats(event_id: str, db: Session = Depends(get_db)):
 @app.post("/api/tickets", status_code=201)
 def register_ticket(
     ticket: TicketRequest,          # <-- ГЛАВНОЕ ИЗМЕНЕНИЕ: принимаем JSON-объект целиком
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db) # noqa: B008
 ):
     # 1. Проверка существования события
     event_stmt = select(Event).where(Event.id == ticket.event_id)
@@ -165,7 +164,7 @@ def register_ticket(
     
     # 3. Проверка дедлайна регистрации
     if event.registration_deadline:
-        now_utc = datetime.now(timezone.utc)
+        now_utc = datetime.now(UTC)
         if now_utc > event.registration_deadline:
             raise HTTPException(status_code=403, detail="Срок регистрации истек")
 
@@ -204,7 +203,7 @@ def register_ticket(
     try:
         db.commit()
         db.refresh(new_reg)
-    except Exception as e:
+    except SQLAlchemyError as e:
         db.rollback()
         logger.error(f"Ошибка сохранения регистрации в БД: {e}")
         raise HTTPException(status_code=500, detail="Не удалось сохранить регистрацию в базе данных")
@@ -220,7 +219,7 @@ def register_ticket(
 
 # --- Отмена регистрации (DELETE /api/tickets/{ticket_id}) ---
 @app.delete("/api/tickets/{ticket_id}")
-def cancel_ticket(ticket_id: str, db: Session = Depends(get_db)):
+def cancel_ticket(ticket_id: str, db: Session = Depends(get_db)):  # noqa: B008
     stmt = select(Registration).where(Registration.ticket_id == ticket_id)
     reg = db.execute(stmt).scalars().first()
     
@@ -245,7 +244,7 @@ def cancel_ticket(ticket_id: str, db: Session = Depends(get_db)):
     reg.status = "cancelled"
     try:
         db.commit()
-    except Exception as e:
+    except SQLAlchemyError as e:
         db.rollback()
         logger.error(f"Ошибка обновления статуса в БД: {e}")
         raise HTTPException(status_code=500, detail="Не удалось обновить статус в базе данных")
@@ -261,11 +260,10 @@ def cancel_ticket(ticket_id: str, db: Session = Depends(get_db)):
 def get_events(
     page: int = 1,
     page_size: int = 20,
-    date_from: Optional[str] = None,
-    db: Session = Depends(get_db),
-):
-    if page < 1:
-        page = 1
+    date_from: str | None = None,
+    db: Session = Depends(get_db), # noqa: B008
+): 
+    page = max(page, 1)
     if page_size < 1 or page_size > 100:
         page_size = 20
 
@@ -277,7 +275,7 @@ def get_events(
     if date_from:
         try:
             dt = datetime.strptime(date_from, "%Y-%m-%d")
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
             count_stmt = count_stmt.where(Event.event_time >= dt)
         except ValueError:
             raise HTTPException(status_code=400, detail="Неверный формат date_from. Используйте YYYY-MM-DD")
@@ -290,7 +288,7 @@ def get_events(
     stmt = stmt.limit(page_size).offset(offset)
     results = db.execute(stmt).scalars().all()
 
-    def format_event(ev: Event) -> Dict[str, Any]:
+    def format_event(ev: Event) -> dict[str, Any]:
         place = None
         if ev.place_id:
             place = {
@@ -331,7 +329,7 @@ def get_events(
     }
 
 @app.get("/debug/stats")
-def get_stats(db: Session = Depends(get_db)):
+def get_stats(db: Session = Depends(get_db)):  # noqa: B008
     total_events_stmt = select(func.count()).select_from(Event)
     total_sync_stmt = select(func.count()).select_from(SyncMetadata)
     

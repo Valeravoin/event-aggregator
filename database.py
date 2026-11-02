@@ -1,13 +1,13 @@
 import os
+
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from dotenv import load_dotenv
 
 # Загружаем переменные из .env. Если файла нет — переменные не появятся,
 # и дальше сработает проверка на отсутствие DATABASE_URL.
 load_dotenv()
 
-from models import Base  
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 

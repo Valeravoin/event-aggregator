@@ -1,7 +1,8 @@
 from sqlalchemy import create_engine
-# Подключаем функцию для создания соединения с базой данных
 
+# Подключаем функцию для создания соединения с базой данных
 from models import Base
+
 # Берём базовый класс из models.py — через него SQLAlchemy знает про все твои таблицы (Event, Registration и т.д.)
 
 DATABASE_URL = "postgresql+psycopg2://postgres:secret@localhost:5432/event_aggregator"

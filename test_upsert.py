@@ -1,18 +1,17 @@
-from database import SessionLocal
-# Подключаем фабрику сессий: это инструмент, чтобы открыть «окошко» к базе данных
-
-from models import Event
-# Нужен, чтобы код понимал, что такое Event (какие у него поля, как он связан с таблицей)
-
-from crud import upsert_event, get_event_by_id
 # Импортируем наши рабочие функции: upsert — это «создай или обнови», get_event_by_id — «найди по ID»
+from datetime import UTC, datetime, timedelta
 
-from datetime import datetime, timedelta, timezone
 # datetime — чтобы задавать конкретные даты; 
 # timedelta — чтобы прибавлять часы/дни к дате (например, +1 час); 
 # timezone — чтобы ставить часовой пояс (обязательно для PostgreSQL)
-
 from uuid import uuid4
+
+# Нужен, чтобы код понимал, что такое Event (какие у него поля, как он связан с таблицей)
+from crud import upsert_event
+from database import SessionLocal
+
+# Подключаем фабрику сессий: это инструмент, чтобы открыть «окошко» к базе данных
+
 # uuid4 генерирует случайный уникальный ID (вроде «550e8400-e29b…») — чтобы не было дублей
 
 
@@ -27,7 +26,7 @@ def main():
         # 1. Создаём событие через upsert
         # first_time — фиксированное время с часовым поясом UTC. 
         # tzinfo=timezone.utc обязателен: в базе даты с поясом, сравнивать без пояса нельзя
-        first_time = datetime(2027, 1, 1, 12, 0, tzinfo=timezone.utc)
+        first_time = datetime(2027, 1, 1, 12, 0, tzinfo=UTC)
         
         ev1 = upsert_event(
             db=db,
@@ -35,13 +34,13 @@ def main():
                 "id": test_id,
                 "name": "Концерт (версия 1)",
                 # Все даты передаём с tzinfo=timezone.utc — это защита от ошибки TypeError
-                "event_time": datetime(2027, 5, 10, 19, 0, tzinfo=timezone.utc),
+                "event_time": datetime(2027, 5, 10, 19, 0, tzinfo=UTC),
                 "status": "published",
                 "place_id": "p1",
                 "place_name": "Зал А",
                 "city": "Москва",
                 "address": "ул. Пушкина",
-                "registration_deadline": datetime(2027, 5, 9, 21, 0, tzinfo=timezone.utc),
+                "registration_deadline": datetime(2027, 5, 9, 21, 0, tzinfo=UTC),
                 "number_of_visitors": 1000,
                 "last_changed_at": first_time,  # время, по которому upsert решает: обновлять или нет
             },
@@ -56,13 +55,13 @@ def main():
                 "id": test_id,
                 # Имя другое, но last_changed_at тот же — значит, upsert не должен перезаписывать
                 "name": "Концерт (версия 1 — повтор)",
-                "event_time": datetime(2027, 5, 10, 19, 0, tzinfo=timezone.utc),
+                "event_time": datetime(2027, 5, 10, 19, 0, tzinfo=UTC),
                 "status": "published",
                 "place_id": "p1",
                 "place_name": "Зал А",
                 "city": "Москва",
                 "address": "ул. Пушкина",
-                "registration_deadline": datetime(2027, 5, 9, 21, 0, tzinfo=timezone.utc),
+                "registration_deadline": datetime(2027, 5, 9, 21, 0, tzinfo=UTC),
                 "number_of_visitors": 1000,
                 "last_changed_at": first_time,  # то же время — значит, обновлять не надо
             },
@@ -78,13 +77,13 @@ def main():
             event_data={
                 "id": test_id,
                 "name": "Концерт (версия 2 — обновлено)",
-                "event_time": datetime(2027, 5, 10, 19, 0, tzinfo=timezone.utc),
+                "event_time": datetime(2027, 5, 10, 19, 0, tzinfo=UTC),
                 "status": "published",
                 "place_id": "p1",
                 "place_name": "Зал А",
                 "city": "Москва",
                 "address": "ул. Пушкина",
-                "registration_deadline": datetime(2027, 5, 9, 21, 0, tzinfo=timezone.utc),
+                "registration_deadline": datetime(2027, 5, 9, 21, 0, tzinfo=UTC),
                 "number_of_visitors": 1200,  # даже число посетителей меняем, чтобы видеть обновление
                 "last_changed_at": new_time,   # время новее — это сигнал для upsert: «надо обновить»
             },

@@ -1,16 +1,15 @@
+# Подтягиваем твои рабочие функции: одну для создания, другую для поиска
+from datetime import datetime
+
+# Нужен, чтобы задавать конкретные даты и время для тестовых данных
+from uuid import uuid4
+
+# Нужна, чтобы понимать, что такое Event (иначе не сможем создать объект или искать по нему)
+from crud import create_event, get_event_by_id
 from database import SessionLocal
+
 # Импортируем фабрику сессий — это то самое «окошко» в базу из database.py
 
-from models import Event
-# Нужна, чтобы понимать, что такое Event (иначе не сможем создать объект или искать по нему)
-
-from crud import create_event, get_event_by_id
-# Подтягиваем твои рабочие функции: одну для создания, другую для поиска
-
-from datetime import datetime
-# Нужен, чтобы задавать конкретные даты и время для тестовых данных
-
-from uuid import uuid4
 # Генерирует случайный UUID (уникальный ID). Для теста важно, чтобы ID точно не совпал с чем-то старым
 
 

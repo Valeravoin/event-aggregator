@@ -1,10 +1,11 @@
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from models import Event, SyncMetadata
 from http_client import EventsApiClient
+from models import Event, SyncMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,7 @@ def run_sync(db: Session, source_name: str = "scheduled-source") -> bool:
 
         # Помечаем как "в процессе"
         sync_record.sync_status = 'running'
-        sync_record.last_sync_time = datetime.now(timezone.utc)
+        sync_record.last_sync_time = datetime.now(UTC)
         db.commit()
 
         # 3. Создаём клиент с правильными параметрами
@@ -67,11 +68,14 @@ def run_sync(db: Session, source_name: str = "scheduled-source") -> bool:
             logger.info(f"🌐 Запрос событий у провайдера (since={since_iso})...")
             try:
                 events_data = client.fetch_events_since(since_iso)
-            except Exception as e:
-                logger.warning(f"⚠️ Не удалось получить события с фильтром по времени: {e}. Попробуем полный список.")
+            except Exception:
+                logger.warning(
+                    "⚠️ Не удалось получить события с фильтром по времени. Попробуем полный список.",
+                    exc_info=True
+                )
                 # Сбрасываем last_event_time, чтобы в следующий раз не повторять ту же ошибку
                 sync_record.last_event_time = None
-                db.commit()
+                db.commit()  # фиксируем сброс времени, чтобы при следующем запуске не повторять ошибку
                 # Дальше пойдём в ветку полного запроса
         else:
             logger.info("🌐 Запрос полного списка событий (без фильтра по времени)...")
@@ -84,7 +88,7 @@ def run_sync(db: Session, source_name: str = "scheduled-source") -> bool:
                 if not isinstance(events_data, list):
                     logger.error("❌ API вернул некорректный формат данных (не список).")
                     events_data = []
-            except Exception as e:
+            except Exception:
                 # ГЛАВНОЕ: НЕ делаем raise! Ловим ошибку, логируем и идём дальше с пустым списком
                 logger.exception("💥 Не удалось получить полный список событий (возможно, 401/сеть). Продолжаем с пустым набором.")
                 events_data = []  # Безопасное значение
@@ -111,7 +115,7 @@ def run_sync(db: Session, source_name: str = "scheduled-source") -> bool:
                 existing_event.registration_deadline = event_item.get("registration_deadline")
                 existing_event.status = event_item.get("status")
                 existing_event.number_of_visitors = event_item.get("number_of_visitors")
-                existing_event.last_changed_at = datetime.now(timezone.utc)
+                existing_event.last_changed_at = datetime.now(UTC)
                 updated_count += 1
             else:
                 # Создаем новое событие
@@ -126,7 +130,7 @@ def run_sync(db: Session, source_name: str = "scheduled-source") -> bool:
                     registration_deadline=event_item.get("registration_deadline"),
                     status=event_item.get("status"),
                     number_of_visitors=event_item.get("number_of_visitors"),
-                    last_changed_at=datetime.now(timezone.utc)
+                    last_changed_at=datetime.now(UTC)
                 )
                 db.add(new_event)
                 processed_count += 1
@@ -141,7 +145,7 @@ def run_sync(db: Session, source_name: str = "scheduled-source") -> bool:
                 latest_event_time = max(times)
 
         sync_record.events_processed = processed_count + updated_count
-        sync_record.last_sync_time = datetime.now(timezone.utc)
+        sync_record.last_sync_time = datetime.now(UTC)
         sync_record.last_event_time = latest_event_time
         sync_record.sync_status = 'idle'
 
@@ -150,13 +154,17 @@ def run_sync(db: Session, source_name: str = "scheduled-source") -> bool:
         logger.info(f"✅ Синхронизация завершена. Новые: {processed_count}, Обновлено: {updated_count}")
         return True
 
-    except Exception as e:
-        logger.exception(f"💥 Критическая ошибка при синхронизации (база данных или другое): {e}")
+    except Exception:
+        logger.exception("💥 Критическая ошибка при синхронизации (база данных или другое)")  # без {e}, exception сам добавит стек трейс
+    
+        # Пытаемся сохранить статус ошибки в БД, но если и тут ошибка — логируем и не «проглатываем»
         try:
-            if 'sync_record' in locals():
+            if 'sync_record' in locals() and sync_record is not None:
                 sync_record.sync_status = 'failed'
-                sync_record.last_sync_time = datetime.now(timezone.utc)
+                sync_record.last_sync_time = datetime.now(UTC)
                 db.commit()
         except Exception:
-            pass
+            logger.exception("💥 Не удалось обновить статус синхронизации в БД")  # тоже без {db_err}
+            # Здесь уже можно не делать commit, потому что транзакция и так откатится при следующем шаге или при закрытии сессии
+    
         return False

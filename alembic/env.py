@@ -1,15 +1,13 @@
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config
-from sqlalchemy import pool
+from sqlalchemy import engine_from_config, pool
 
+# Это важно: чтобы autogenerate видел твои модели (Event, SyncMetadata, Registration)
+import models  # noqa: F401
 from alembic import context
 
 # Твой движок из database.py
 from database import engine
-
-# Это важно: чтобы autogenerate видел твои модели (Event, SyncMetadata, Registration)
-import models  # просто импортируем модуль, чтобы SQLAlchemy их зарегистрировал
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -24,6 +22,7 @@ if config.config_file_name is not None:
 
 # Указываем метаданные, которые Alembic должен использовать для сравнения
 from models import Base
+
 target_metadata = Base.metadata
 
 

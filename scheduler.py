@@ -1,7 +1,9 @@
 # scheduler.py
 import logging
+
 from apscheduler.schedulers.background import BackgroundScheduler
 from sqlalchemy.orm import Session
+
 from database import get_db
 from sync_runner import run_sync
 
@@ -20,8 +22,8 @@ def create_scheduler():
                 logger.info("✅ Запланированная синхронизация завершена успешно")
             else:
                 logger.error("❌ Запланированная синхронизация завершилась с ошибкой")
-        except Exception as e:
-            logger.exception("💥 Критическая ошибка в планировщике: %s", e)
+        except Exception:
+            logger.exception("💥 Критическая ошибка в планировщике")
         finally:
             db.close()  # Обязательно закрываем!
 
@@ -31,8 +33,8 @@ def create_scheduler():
     try:
         run_sync(initial_db, source_name="scheduled-source")
         logger.info("✅ Ручная синхронизация при старте завершена.")
-    except Exception as e:
-        logger.exception("💥 Ошибка при ручной синхронизации: %s", e)
+    except Exception:
+        logger.exception("💥 Ошибка при ручной синхронизации")
     finally:
         initial_db.close()
 

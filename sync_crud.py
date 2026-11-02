@@ -1,8 +1,10 @@
 # sync_crud.py
+from datetime import UTC, datetime
+
 from sqlalchemy import select
-from datetime import datetime, timezone
-from database import SessionLocal
+
 from models import SyncMetadata
+
 
 def get_last_sync(db, source_name: str = "real-api"):
     """
@@ -34,7 +36,7 @@ def update_last_sync(
     result = db.execute(stmt)
     record = result.scalars().first()
 
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
 
     if record:
         # Обновляем существующую

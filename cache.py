@@ -1,5 +1,6 @@
 import time
-from typing import Any, Optional, Dict
+from typing import Any
+
 
 class SimpleCache:
     """
@@ -9,11 +10,11 @@ class SimpleCache:
     """
 
     def __init__(self, default_ttl_seconds: int = 60):
-        self._data: Dict[str, Any] = {}
-        self._timestamps: Dict[str, float] = {}
+        self._data: dict[str, Any] = {}
+        self._timestamps: dict[str, float] = {}
         self.default_ttl_seconds = default_ttl_seconds
 
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str) -> Any | None:
         """Получить значение. Вернет None, если ключа нет или время истекло."""
         if key not in self._data:
             return None
@@ -26,9 +27,8 @@ class SimpleCache:
             
         return self._data[key]
 
-    def set(self, key: str, value: Any, ttl_seconds: Optional[int] = None):
+    def set(self, key: str, value: Any, ttl_seconds: int | None = None):
         """Сохранить значение с временем жизни."""
-        ttl = ttl_seconds if ttl_seconds is not None else self.default_ttl_seconds
         self._data[key] = value
         self._timestamps[key] = time.time()
 
