@@ -60,30 +60,31 @@ def get_db():
         db.close()
 
 
+import asyncio
+
 @app.on_event("startup")
 async def startup():
-    """
-    Выполняется при старте FastAPI-сервера через uvicorn.
-    Здесь запускаем стартовую синхронизацию и планировщик.
-    """
     logger.info("🚀 Приложение EventAggregator запущено.")
 
-    # Стартовая синхронизация: run_sync теперь async — обязателен await
-    with SessionLocal() as db:
-        try:
-            if await run_sync(db, source_name="startup-source"):
-                logger.info("✅ Стартовая синхронизация завершена.")
-            else:
-                logger.warning("⚠️ Стартовая синхронизация частично не удалась.")
-        except Exception:
-            logger.exception("💥 Ошибка при стартовой синхронизации")
+    async def _startup_sync():
+        with SessionLocal() as db:
+            try:
+                if await run_sync(db, source_name="startup-source"):
+                    logger.info("✅ Стартовая синхронизация завершена.")
+                else:
+                    logger.warning("⚠️ Стартовая синхронизация частично не удалась.")
+            except Exception:
+                logger.exception("💥 Ошибка при стартовой синхронизации")
+
+    # Фоновая задача: не блокируем подъём сервера
+    asyncio.create_task(_startup_sync())
 
     try:
         scheduler.start()
         logger.info("🕒 Планировщик запущен: интервал 24 часа.")
     except Exception as e:
         logger.error("Не удалось запустить планировщик: %s", e)
-        # Даже без планировщика сервер продолжает работать.
+
 
 
 # --- Health Check ---
