@@ -29,11 +29,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- ГЛОБАЛЬНЫЙ КЛИЕНТ (КРИТИЧНО ДЛЯ ТЕСТОВ) ---
-# Создаём на уровне модуля, чтобы тесты могли делать patch.object(main.client, ...)
-if not EVENTS_PROVIDER_BASE_URL:
-    raise RuntimeError("EVENTS_PROVIDER_BASE_URL не установлен в переменных окружения!")
+# Создаём на уровне модуля, чтобы тесты могли делать patch.object(main.client, ...).
+# Оборачиваем в try/except: если env не задан, модуль НЕ должен упасть —
+# иначе uvicorn не стартует и nginx отдаёт 502/503 на все запросы.
+client: EventsApiClient | None = None
+try:
+    if not EVENTS_PROVIDER_BASE_URL:
+        logger.error("❌ EVENTS_PROVIDER_BASE_URL не установлен в переменных окруженияx!")
+    else:
+        client = EventsApiClient(base_url=EVENTS_PROVIDER_BASE_URL)
+        logger.info("✅ Глобальный клиент EventsApiClient создан")
+except Exception:
+    logger.exception("💥 Не удалось создать EventsApiClient — проверь env на платформе")
 
-client = EventsApiClient(base_url=EVENTS_PROVIDER_BASE_URL)
 
 # --- КЭШ МЕСТ ---
 _seats_cache: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -198,18 +206,21 @@ async def get_available_seats(event_id: UUID, db: Session = Depends(get_db)):
         )
 
     logger.info(f"🌐 Запрос свободных мест у Events Provider для {cache_key}")
+    if client is None:
+        raise HTTPException(status_code=503, detail="Клиент провайдера не инициализирован: проверьте EVENTS_PROVIDER_* переменные")
     seats_data, error = await client.get_seats(event_id)
 
-    if error:
-        raise HTTPException(status_code=502, detail=f"Ошибка провайдера: {error}")
-
-    _seats_cache[cache_key] = (time.time(), seats_data)
-    return seats_data
 
 
 # --- Регистрация (через UseCase) ---
 @app.post("/api/tickets", status_code=201)
 async def register_ticket(ticket: TicketRequest, db: Session = Depends(get_db)):
+    if client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Клиент провайдера не инициализирован: проверьте EVENTS_PROVIDER_* переменные"
+        )
+
     event_repo = EventRepository(db)
     ticket_repo = RegistrationRepository(db)
 
@@ -237,9 +248,16 @@ async def register_ticket(ticket: TicketRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=status_code, detail=detail)
 
 
+
 # --- Отмена регистрации (через UseCase) ---
 @app.delete("/api/tickets/{ticket_id}")
 def cancel_ticket(ticket_id: str, db: Session = Depends(get_db)):
+    if client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Клиент провайдера не инициализирован: проверьте EVENTS_PROVIDER_* переменные"
+        )
+
     event_repo = EventRepository(db)
     ticket_repo = RegistrationRepository(db)
 
@@ -261,8 +279,3 @@ def cancel_ticket(ticket_id: str, db: Session = Depends(get_db)):
             detail = msg.split(":", 1)[1]
             raise HTTPException(status_code=status_code, detail=detail)
         raise HTTPException(status_code=500, detail=msg)
-
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
