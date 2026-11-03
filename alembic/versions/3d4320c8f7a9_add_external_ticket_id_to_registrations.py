@@ -1,13 +1,13 @@
 """add external_ticket_id to registrations
 
 Revision ID: 3d4320c8f7a9
-Revises: 
+Revises:
 Create Date: 2026-11-03 18:04:00.000000
 
 """
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = '3d4320c8f7a9'

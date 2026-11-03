@@ -1,4 +1,3 @@
-import os
 
 from logging.config import fileConfig
 
@@ -11,10 +10,9 @@ from alembic import context
 load_dotenv()
 
 # Твой движок из database.py
-from database import engine
-
 # Это важно: чтобы autogenerate видел твои модели (Event, SyncMetadata, Registration)
 import models  # noqa: F401
+from database import engine
 from models import Base
 
 # this is the Alembic Config object, which provides
