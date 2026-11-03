@@ -9,7 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from database import SessionLocal, engine
+from database import SessionLocal
 from http_client import EventsApiClient
 
 # Слой зависимостей

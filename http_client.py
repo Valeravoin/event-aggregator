@@ -4,7 +4,7 @@ from uuid import UUID
 
 import httpx
 
-from settings import EVENTS_PROVIDER_BASE_URL, EVENTS_PROVIDER_API_KEY
+from settings import EVENTS_PROVIDER_API_KEY, EVENTS_PROVIDER_BASE_URL
 
 logger = logging.getLogger(__name__)
 
