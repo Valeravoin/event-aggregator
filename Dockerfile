@@ -11,5 +11,5 @@ COPY . .
 
 EXPOSE 8000
 
-# Применяем миграции при старте, затем запускаем сервер
-CMD ["sh", "-c", "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"]
+# Миграции с повторами (база может подниматься позже контейнера), затем запуск сервера
+CMD ["sh", "-c", "until alembic upgrade head; do echo 'migration failed, retry in 5s...'; sleep 5; done && uvicorn main:app --host 0.0.0.0 --port 8000"]
