@@ -1,6 +1,7 @@
 import logging
 import time
 from typing import Any
+from urllib.parse import urlencode
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -10,7 +11,6 @@ from sqlalchemy.orm import Session
 
 from database import SessionLocal, engine
 from http_client import EventsApiClient
-from models import Base
 
 # Слой зависимостей
 from repositories.event_repository import EventRepository
@@ -22,30 +22,27 @@ from services.ticket_registration_usecase import TicketRegistrationUseCase
 from settings import EVENTS_PROVIDER_BASE_URL
 from sync_runner import run_sync
 
-# --- ГЛОБАЛЬНЫЙ КЛИЕНТ (КРИТИЧНО ДЛЯ ТЕСТОВ) ---
-# Мы создаем его здесь, чтобы тесты могли делать patch.object(main.client, ...)
-if not EVENTS_PROVIDER_BASE_URL:
-    raise RuntimeError("EVENTS_PROVIDER_BASE_URL не установлен в переменных окружения!")
-
-client = EventsApiClient(base_url=EVENTS_PROVIDER_BASE_URL)
-
-# --- КЭШ МЕСТ ---
-# Ключ теперь всегда строка (str), чтобы избежать проблем с хешированием UUID в словарях
-_seats_cache: dict[str, tuple[float, dict[str, Any]]] = {}
-CACHE_TTL = 30
-
-Base.metadata.create_all(bind=engine)
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 logger = logging.getLogger(__name__)
 
-# Инициализируем планировщик (создаём объект, но НЕ запускаем)
+# --- ГЛОБАЛЬНЫЙ КЛИЕНТ (КРИТИЧНО ДЛЯ ТЕСТОВ) ---
+# Создаём на уровне модуля, чтобы тесты могли делать patch.object(main.client, ...)
+if not EVENTS_PROVIDER_BASE_URL:
+    raise RuntimeError("EVENTS_PROVIDER_BASE_URL не установлен в переменных окружения!")
+
+client = EventsApiClient(base_url=EVENTS_PROVIDER_BASE_URL)
+
+# --- КЭШ МЕСТ ---
+_seats_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+CACHE_TTL = 30
+
 scheduler = create_scheduler()
 
 app = FastAPI(title="EventAggregator LMS")
+
 
 def get_db():
     db = SessionLocal()
@@ -58,39 +55,27 @@ def get_db():
 @app.on_event("startup")
 async def startup():
     """
-    Этот блок выполняется ТОЛЬКО при старте FastAPI-сервера (через uvicorn).
-    В тестах он не запускается автоматически, если ты не используешь TestClient с live-server.
-    Здесь можно делать лёгкие проверки, но тяжёлые задачи лучше не ставить.
+    Выполняется при старте FastAPI-сервера через uvicorn.
+    Здесь запускаем стартовую синхронизацию и планировщик.
     """
     logger.info("🚀 Приложение EventAggregator запущено.")
 
-
-if __name__ == "__main__":
-    # --- ЭТОТ БЛОК ВЫПОЛНЯЕТСЯ ТОЛЬКО ПРИ ЗАПУСКЕ СЕРВЕРА, НЕ В ТЕСТАХ ---
-
-    # 1. Ручной запуск синхронизации при старте (один раз)
-    logger.info("🔄 Запуск ручной синхронизации при старте сервера...")
+    # Стартовая синхронизация: run_sync теперь async — обязателен await
     with SessionLocal() as db:
         try:
-            success = run_sync(db, source_name="startup-source")
-            if success:
-                logger.info("✅ Ручная синхронизация при старте завершена.")
+            if await run_sync(db, source_name="startup-source"):
+                logger.info("✅ Стартовая синхронизация завершена.")
             else:
-                logger.warning("⚠️ Ручная синхронизация при старте частично не удалась.")
+                logger.warning("⚠️ Стартовая синхронизация частично не удалась.")
         except Exception:
-            logger.exception("💥 Ошибка при ручной синхронизации при старте")
+            logger.exception("💥 Ошибка при стартовой синхронизации")
 
-    # 2. Запуск планировщика (фоновая задача каждые 24 часа)
     try:
         scheduler.start()
         logger.info("🕒 Планировщик запущен: интервал 24 часа.")
     except Exception as e:
         logger.error("Не удалось запустить планировщик: %s", e)
-        # Важно: даже если планировщик не запустился, сервер может работать дальше,
-        # просто не будет автоматической синхронизации.
-
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+        # Даже без планировщика сервер продолжает работать.
 
 
 # --- Health Check ---
@@ -104,46 +89,21 @@ def health():
         logger.error("Ошибка подключения к БД: %s", e)
         return {"status": "error", "detail": str(e)}
 
+
 # --- Ручной запуск синхронизации ---
 @app.post("/api/sync/trigger")
-def trigger_sync(db: Session = Depends(get_db)):
-    success = run_sync(db)
+async def trigger_sync(db: Session = Depends(get_db)):
+    try:
+        success = await run_sync(db)
+    except Exception:
+        logger.exception("💥 Ошибка при запуске синхронизации")
+        success = False
     if success:
         return {"status": "success", "message": "Синхронизация завершена"}
-    else:
-        return {"status": "failed", "message": "Синхронизация завершилась с ошибкой (см. логи)"}
+    return {"status": "failed", "message": "Синхронизация завершилась с ошибкой (см. логи)"}
 
-# --- Детали события ---
-@app.get("/api/events/{event_id}")
-def get_event_details(event_id: UUID, db: Session = Depends(get_db)):
-    repo = EventRepository(db)
-    event = repo.get_by_id(event_id)
 
-    if not event:
-        raise HTTPException(status_code=404, detail="Событие не найдено")
-
-    place = None
-    if event.place_id:
-        place = {
-            "id": str(event.place_id),
-            "name": event.place_name,
-            "city": event.city,
-            "address": event.address,
-            "seats_pattern": "A1-1000,B1-2000",
-        }
-
-    return {
-        "id": str(event.id),
-        "name": event.name,
-        "place": place,
-        "event_time": event.event_time.isoformat() if event.event_time else None,
-        "registration_deadline": event.registration_deadline.isoformat()
-            if event.registration_deadline else None,
-        "status": event.status,
-        "number_of_visitors": event.number_of_visitors,
-    }
-
-# --- Список событий с пагинацией ---
+# --- Список событий с пагинацией (контракт DRF: count/next/previous/results) ---
 @app.get("/api/events")
 def list_events(page: int = 1, per_page: int = 10, db: Session = Depends(get_db)):
     if page < 1:
@@ -155,12 +115,16 @@ def list_events(page: int = 1, per_page: int = 10, db: Session = Depends(get_db)
     total = repo.count_events()
     events = repo.get_events_page(offset=(page - 1) * per_page, limit=per_page)
 
+    def _page_url(p: int):
+        if p < 1 or (p - 1) * per_page >= total:
+            return None
+        return f"/api/events?{urlencode({'page': p, 'per_page': per_page})}"
+
     return {
-        "total": total,
-        "page": page,
-        "per_page": per_page,
-        "pages": (total + per_page - 1) // per_page,
-        "items": [
+        "count": total,
+        "next": _page_url(page + 1),
+        "previous": _page_url(page - 1),
+        "results": [
             {
                 "id": str(ev.id),
                 "name": ev.name,
@@ -178,9 +142,40 @@ def list_events(page: int = 1, per_page: int = 10, db: Session = Depends(get_db)
     }
 
 
+# --- Детали события ---
+@app.get("/api/events/{event_id}")
+def get_event_details(event_id: UUID, db: Session = Depends(get_db)):
+    repo = EventRepository(db)
+    event = repo.get_by_id(event_id)
+
+    if not event:
+        raise HTTPException(status_code=404, detail="Событие не найдено")
+
+    place = None
+    if event.place_id:
+        place = {
+            "id": str(event.place_id),
+            "name": event.place_name,
+            "city": event.city,
+            "address": event.address,
+            "seats_pattern": event.seats_pattern,  # реальное значение из синка
+        }
+
+    return {
+        "id": str(event.id),
+        "name": event.name,
+        "place": place,
+        "event_time": event.event_time.isoformat() if event.event_time else None,
+        "registration_deadline": event.registration_deadline.isoformat()
+            if event.registration_deadline else None,
+        "status": event.status,
+        "number_of_visitors": event.number_of_visitors,
+    }
+
+
 # --- Свободные места (с кэшем) ---
 @app.get("/api/events/{event_id}/seats")
-async def get_available_seats(event_id: UUID, db: Session = Depends(get_db)):   # ✅ async
+async def get_available_seats(event_id: UUID, db: Session = Depends(get_db)):
     now = time.time()
     cache_key = str(event_id)
 
@@ -203,7 +198,7 @@ async def get_available_seats(event_id: UUID, db: Session = Depends(get_db)):   
         )
 
     logger.info(f"🌐 Запрос свободных мест у Events Provider для {cache_key}")
-    seats_data, error = await client.get_seats(event_id)   # ✅ await добавлен
+    seats_data, error = await client.get_seats(event_id)
 
     if error:
         raise HTTPException(status_code=502, detail=f"Ошибка провайдера: {error}")
@@ -229,7 +224,7 @@ async def register_ticket(ticket: TicketRequest, db: Session = Depends(get_db)):
             first_name=ticket.first_name,
             last_name=ticket.last_name,
             email=ticket.email,
-            event_id=ticket.event_id,  # Это уже UUID благодаря Pydantic
+            event_id=ticket.event_id,
             seat=ticket.seat,
         )
         return result
@@ -266,3 +261,8 @@ def cancel_ticket(ticket_id: str, db: Session = Depends(get_db)):
             detail = msg.split(":", 1)[1]
             raise HTTPException(status_code=status_code, detail=detail)
         raise HTTPException(status_code=500, detail=msg)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
