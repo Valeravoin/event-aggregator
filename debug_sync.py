@@ -3,10 +3,11 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 
+from sqlalchemy import func, select
+
 from database import SessionLocal
 from models import Event
 from sync_runner import run_sync
-from sqlalchemy import select, func
 
 
 async def main():
