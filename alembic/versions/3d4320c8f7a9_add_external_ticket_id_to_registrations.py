@@ -27,3 +27,4 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_column('registrations', 'external_ticket_id')
+
