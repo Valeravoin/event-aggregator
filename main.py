@@ -62,6 +62,7 @@ def get_db():
 
 import asyncio
 
+
 @app.on_event("startup")
 async def startup():
     logger.info("🚀 Приложение EventAggregator запущено.")
