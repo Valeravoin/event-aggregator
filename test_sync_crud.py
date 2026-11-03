@@ -25,7 +25,7 @@ def main():
             source_name="test-api",
             events_processed=5
         )
-        
+
         print("✅ Запись создана: source_name=", log_entry.source_name, "| events=", log_entry.events_processed)
         print("   last_event_time (то, что передали) =", log_entry.last_event_time)
         print("   last_sync_time (когда реально вставили) =", log_entry.last_sync_time)
@@ -35,7 +35,7 @@ def main():
         print("🕒 Вторая проверка (last_sync_time из БД):", second_check_time)
 
         # --- ПРАВИЛЬНЫЕ ПРОВЕРКИ ---
-        
+
         # Проверка А: совпадает ли last_event_time в объекте с тем, что мы передали?
         diff_event = abs(log_entry.last_event_time - test_time).total_seconds()
         print(f"Разница между переданным test_time и last_event_time: {diff_event} сек")

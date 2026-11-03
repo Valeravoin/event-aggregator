@@ -18,13 +18,13 @@ class SimpleCache:
         """Получить значение. Вернет None, если ключа нет или время истекло."""
         if key not in self._data:
             return None
-        
+
         ts = self._timestamps.get(key, 0)
         # Если прошло больше времени, чем TTL — считаем данные устаревшими
         if time.time() - ts > self.default_ttl_seconds:
             self.delete(key)
             return None
-            
+
         return self._data[key]
 
     def set(self, key: str, value: Any, ttl_seconds: int | None = None):

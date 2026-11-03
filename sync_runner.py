@@ -53,45 +53,20 @@ def run_sync(db: Session, source_name: str = "scheduled-source") -> bool:
         sync_record.last_sync_time = datetime.now(UTC)
         db.commit()
 
-        # 3. Создаём клиент с правильными параметрами
+        # 3. Создаём клиент
         client = EventsApiClient()
-    
         logger.debug("✅ HTTP клиент успешно инициализирован")
 
-        # 4. Подготавливаем время для запроса
-        last_event_time = sync_record.last_event_time
-        events_data = []
-
-        if last_event_time:
-            # Важно: last_event_time из БД может быть datetime, isoformat нужен для API
-            since_iso = last_event_time.isoformat()
-            logger.info(f"🌐 Запрос событий у провайдера (since={since_iso})...")
-            try:
-                events_data = client.fetch_events_since(since_iso)
-            except Exception:
-                logger.warning(
-                    "⚠️ Не удалось получить события с фильтром по времени. Попробуем полный список.",
-                    exc_info=True
-                )
-                # Сбрасываем last_event_time, чтобы в следующий раз не повторять ту же ошибку
-                sync_record.last_event_time = None
-                db.commit()  # фиксируем сброс времени, чтобы при следующем запуске не повторять ошибку
-                # Дальше пойдём в ветку полного запроса
-        else:
-            logger.info("🌐 Запрос полного списка событий (без фильтра по времени)...")
-
-        # Если events_data пустой или мы не смогли сделать фильтр — запрашиваем всё целиком
-        if not events_data:
-            logger.info("🔄 Выполняем полный запрос списка событий...")
-            try:
-                events_data = client.fetch_all_events()
-                if not isinstance(events_data, list):
-                    logger.error("❌ API вернул некорректный формат данных (не список).")
-                    events_data = []
-            except Exception:
-                # ГЛАВНОЕ: НЕ делаем raise! Ловим ошибку, логируем и идём дальше с пустым списком
-                logger.exception("💥 Не удалось получить полный список событий (возможно, 401/сеть). Продолжаем с пустым набором.")
-                events_data = []  # Безопасное значение
+        # 4. Сразу запрашиваем полный список событий (без фильтра since)
+        logger.info("🌐 Запрос полного списка событий у провайдера...")
+        try:
+            events_data = client.fetch_all_events()
+            if not isinstance(events_data, list):
+                logger.error("❌ API вернул некорректный формат данных (не список).")
+                events_data = []
+        except Exception:
+            logger.exception("💥 Не удалось получить список событий. Продолжаем с пустым набором.")
+            events_data = []  # Безопасное значение
 
         processed_count = 0
         updated_count = 0
@@ -155,16 +130,15 @@ def run_sync(db: Session, source_name: str = "scheduled-source") -> bool:
         return True
 
     except Exception:
-        logger.exception("💥 Критическая ошибка при синхронизации (база данных или другое)")  # без {e}, exception сам добавит стек трейс
-    
-        # Пытаемся сохранить статус ошибки в БД, но если и тут ошибка — логируем и не «проглатываем»
+        logger.exception("💥 Критическая ошибка при синхронизации (база данных или другое)")
+
+        # Пытаемся сохранить статус ошибки в БД
         try:
             if 'sync_record' in locals() and sync_record is not None:
                 sync_record.sync_status = 'failed'
                 sync_record.last_sync_time = datetime.now(UTC)
                 db.commit()
         except Exception:
-            logger.exception("💥 Не удалось обновить статус синхронизации в БД")  # тоже без {db_err}
-            # Здесь уже можно не делать commit, потому что транзакция и так откатится при следующем шаге или при закрытии сессии
-    
+            logger.exception("💥 Не удалось обновить статус синхронизации в БД")
+
         return False

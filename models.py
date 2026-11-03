@@ -10,13 +10,13 @@ class SyncMetadata(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     source_name = Column(String, nullable=False, unique=True)
-    
+
     # Время последней синхронизации
     last_sync_time = Column(DateTime(timezone=True), nullable=True)
-    
+
     # ИСПРАВЛЕНИЕ: используем func.now() вместо datetime.utcnow(), чтобы время ставилось в момент INSERT
     last_changed_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
-    
+
     sync_status = Column(String, default='idle')
     events_processed = Column(Integer, default=0)
     last_event_time = Column(DateTime(timezone=True), nullable=True)
@@ -45,10 +45,13 @@ class Registration(Base):
     __tablename__ = 'registrations'
 
     ticket_id = Column(UUID(as_uuid=True), primary_key=True)
-    
-    # ДОБАВЛЕНО: ForeignKey для жесткой связи с таблицей events
+
+    # Внешний ID билета, который вернул провайдер
+    external_ticket_id = Column(String, nullable=True)  # <-- ДОБАВЛЕНО
+
+    # Жесткая связь с таблицей events
     event_id = Column(UUID(as_uuid=True), ForeignKey('events.id', ondelete='CASCADE'), index=True)
-    
+
     email = Column(String)
     first_name = Column(String)
     last_name = Column(String)
@@ -56,5 +59,5 @@ class Registration(Base):
     status = Column(String, default='active')
     created_at = Column(DateTime(timezone=True), default=func.now())
 
-    # ДОБАВЛЕНО: Обратная связь к событию
+    # Обратная связь к событию
     event = relationship("Event", back_populates="registrations")

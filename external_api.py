@@ -7,7 +7,6 @@ from uuid import uuid4
 def fetch_events_since(last_sync_time):
     """
     Имитирует запрос к внешнему API.
-    
     ВАЖНО: все даты здесь теперь с часовым поясом (UTC), чтобы не было конфликтов
     при сравнении с last_event_time из базы (где DateTime(timezone=True)).
     """
@@ -22,7 +21,7 @@ def fetch_events_since(last_sync_time):
     if last_sync_time is None:
         # ✅ Теперь base_time — aware (с поясом)
         base_time = utc_dt(2027, 1, 1, 12, 0)
-        
+
         events.append({
             "id": str(uuid4()),
             "name": "Концерт: Классика в парке",
@@ -67,11 +66,11 @@ def fetch_events_since(last_sync_time):
     else:
         # Повторный запуск: отдаём только новые/изменённые события,
         # у которых last_changed_at > last_sync_time
-        
+
         # ⚠️ Важно: last_sync_time приходит из базы — он уже aware (с поясом).
         # Поэтому new_event_time тоже должен быть aware.
         new_event_time = last_sync_time + timedelta(minutes=5)
-        
+
         events.append({
             "id": str(uuid4()),
             "name": "Новое событие после синхронизации",

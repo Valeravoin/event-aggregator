@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from pydantic import BaseModel
 
 
@@ -11,4 +13,4 @@ class TicketRequest(BaseModel):
     last_name: str
     email: str
     seat: str
-    event_id: str
+    event_id: UUID  # <-- теперь это UUID, а не str

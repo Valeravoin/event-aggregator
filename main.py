@@ -1,43 +1,49 @@
 import logging
 import time
-import uuid
-from datetime import UTC, datetime
 from typing import Any
+from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException
-from sqlalchemy import func, select, text
+from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-# --- Импорты проекта ---
 from database import SessionLocal, engine
-from http_client import EventsApiClient  # нужен для вызовов к провайдеру
-from models import Base, Event, Registration, SyncMetadata
+from http_client import EventsApiClient
+from models import Base
+
+# Слой зависимостей
+from repositories.event_repository import EventRepository
+from repositories.registration_repository import RegistrationRepository
 from scheduler import create_scheduler
 from schemas import TicketRequest
+from services.ticket_cancellation_usecase import TicketCancellationUseCase
+from services.ticket_registration_usecase import TicketRegistrationUseCase
 from settings import EVENTS_PROVIDER_BASE_URL
 from sync_runner import run_sync
 
-_seats_cache = {}  # {event_id: (timestamp, data)}
-CACHE_TTL = 30      # секунд
+# --- ГЛОБАЛЬНЫЙ КЛИЕНТ (КРИТИЧНО ДЛЯ ТЕСТОВ) ---
+# Мы создаем его здесь, чтобы тесты могли делать patch.object(main.client, ...)
+if not EVENTS_PROVIDER_BASE_URL:
+    raise RuntimeError("EVENTS_PROVIDER_BASE_URL не установлен в переменных окружения!")
 
 client = EventsApiClient(base_url=EVENTS_PROVIDER_BASE_URL)
 
-# ЭТА СТРОКА СОЗДАСТ ТАБЛИЦЫ, ЕСЛИ ИХ НЕТ (MVP подход)
+# --- КЭШ МЕСТ ---
+# Ключ теперь всегда строка (str), чтобы избежать проблем с хешированием UUID в словарях
+_seats_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+CACHE_TTL = 30
+
 Base.metadata.create_all(bind=engine)
 
-# Настройка логов
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 logger = logging.getLogger(__name__)
 
-
-# Инициализация планировщика (один раз при старте процесса)
+# Инициализируем планировщик (создаём объект, но НЕ запускаем)
 scheduler = create_scheduler()
-scheduler.start()
-logger.info("🔧 Планировщик запущен. Следующая синхронизация через 24 часа (или по расписанию).")
 
 app = FastAPI(title="EventAggregator LMS")
 
@@ -47,6 +53,45 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+@app.on_event("startup")
+async def startup():
+    """
+    Этот блок выполняется ТОЛЬКО при старте FastAPI-сервера (через uvicorn).
+    В тестах он не запускается автоматически, если ты не используешь TestClient с live-server.
+    Здесь можно делать лёгкие проверки, но тяжёлые задачи лучше не ставить.
+    """
+    logger.info("🚀 Приложение EventAggregator запущено.")
+
+
+if __name__ == "__main__":
+    # --- ЭТОТ БЛОК ВЫПОЛНЯЕТСЯ ТОЛЬКО ПРИ ЗАПУСКЕ СЕРВЕРА, НЕ В ТЕСТАХ ---
+
+    # 1. Ручной запуск синхронизации при старте (один раз)
+    logger.info("🔄 Запуск ручной синхронизации при старте сервера...")
+    with SessionLocal() as db:
+        try:
+            success = run_sync(db, source_name="startup-source")
+            if success:
+                logger.info("✅ Ручная синхронизация при старте завершена.")
+            else:
+                logger.warning("⚠️ Ручная синхронизация при старте частично не удалась.")
+        except Exception:
+            logger.exception("💥 Ошибка при ручной синхронизации при старте")
+
+    # 2. Запуск планировщика (фоновая задача каждые 24 часа)
+    try:
+        scheduler.start()
+        logger.info("🕒 Планировщик запущен: интервал 24 часа.")
+    except Exception as e:
+        logger.error("Не удалось запустить планировщик: %s", e)
+        # Важно: даже если планировщик не запустился, сервер может работать дальше,
+        # просто не будет автоматической синхронизации.
+
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
 
 # --- Health Check ---
 @app.get("/api/health")
@@ -61,19 +106,18 @@ def health():
 
 # --- Ручной запуск синхронизации ---
 @app.post("/api/sync/trigger")
-def trigger_sync(db: Session = Depends(get_db)):  # noqa: B008
+def trigger_sync(db: Session = Depends(get_db)):
     success = run_sync(db)
     if success:
         return {"status": "success", "message": "Синхронизация завершена"}
     else:
         return {"status": "failed", "message": "Синхронизация завершилась с ошибкой (см. логи)"}
 
-# --- Детали события (GET /api/events/{event_id}) ---
+# --- Детали события ---
 @app.get("/api/events/{event_id}")
-def get_event_details(event_id: str, db: Session = Depends(get_db)):  # noqa: B008
-    stmt = select(Event).where(Event.id == event_id)
-    result = db.execute(stmt)
-    event = result.scalars().first()
+def get_event_details(event_id: UUID, db: Session = Depends(get_db)):
+    repo = EventRepository(db)
+    event = repo.get_by_id(event_id)
 
     if not event:
         raise HTTPException(status_code=404, detail="Событие не найдено")
@@ -85,9 +129,8 @@ def get_event_details(event_id: str, db: Session = Depends(get_db)):  # noqa: B0
             "name": event.place_name,
             "city": event.city,
             "address": event.address,
-            "seats_pattern": "A1-1000,B1-2000",  # заглушка по ТЗ
+            "seats_pattern": "A1-1000,B1-2000",
         }
-
 
     return {
         "id": str(event.id),
@@ -100,244 +143,126 @@ def get_event_details(event_id: str, db: Session = Depends(get_db)):  # noqa: B0
         "number_of_visitors": event.number_of_visitors,
     }
 
-# --- Свободные места (GET /api/events/{event_id}/seats) ---
+# --- Список событий с пагинацией ---
+@app.get("/api/events")
+def list_events(page: int = 1, per_page: int = 10, db: Session = Depends(get_db)):
+    if page < 1:
+        raise HTTPException(status_code=400, detail="page должна быть >= 1")
+    if not (1 <= per_page <= 100):
+        raise HTTPException(status_code=400, detail="per_page должна быть от 1 до 100")
+
+    repo = EventRepository(db)
+    total = repo.count_events()
+    events = repo.get_events_page(offset=(page - 1) * per_page, limit=per_page)
+
+    return {
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "pages": (total + per_page - 1) // per_page,
+        "items": [
+            {
+                "id": str(ev.id),
+                "name": ev.name,
+                "place_name": ev.place_name,
+                "city": ev.city,
+                "event_time": ev.event_time.isoformat() if ev.event_time else None,
+                "registration_deadline": (
+                    ev.registration_deadline.isoformat()
+                    if ev.registration_deadline else None
+                ),
+                "status": ev.status,
+            }
+            for ev in events
+        ],
+    }
+
+
+# --- Свободные места (с кэшем) ---
 @app.get("/api/events/{event_id}/seats")
-def get_available_seats(event_id: str, db: Session = Depends(get_db)):  # noqa: B008
+async def get_available_seats(event_id: UUID, db: Session = Depends(get_db)):   # ✅ async
     now = time.time()
-    
-    # Проверка кэша
-    if event_id in _seats_cache:
-        ts, cached_data = _seats_cache[event_id]
+    cache_key = str(event_id)
+
+    if cache_key in _seats_cache:
+        ts, cached_data = _seats_cache[cache_key]
         if now - ts < CACHE_TTL:
-            logger.info(f"💾 Возвращаем данные из кэша для события {event_id}")
+            logger.info(f"💾 Возвращаем данные из кэша для события {cache_key}")
             return cached_data
 
-    # Дальше твой существующий код проверки события и статуса...
-    stmt = select(Event).where(Event.id == event_id)
-    event = db.execute(stmt).scalars().first()
+    repo = EventRepository(db)
+    event = repo.get_by_id(event_id)
+
     if not event:
         raise HTTPException(status_code=404, detail="Событие не найдено в агрегаторе")
+
     if event.status != "published":
         raise HTTPException(
-            status_code=403, 
-            detail="Регистрация возможна только для опубликованных событий. Статус: " + event.status
+            status_code=403,
+            detail=f"Регистрация возможна только для опубликованных событий. Статус: {event.status}"
         )
 
-    logger.info(f"🌐 Запрос свободных мест у Events Provider для {event_id}")
-    seats_data, error = client.get_seats(event_id)
+    logger.info(f"🌐 Запрос свободных мест у Events Provider для {cache_key}")
+    seats_data, error = await client.get_seats(event_id)   # ✅ await добавлен
 
     if error:
-        logger.warning(f"Ошибка интеграции с провайдером: {error}")
-        raise HTTPException(status_code=502, detail=f"Не удалось получить места от провайдера: {error}")
+        raise HTTPException(status_code=502, detail=f"Ошибка провайдера: {error}")
 
-    response_payload = {
-        "event_id": event_id,
-        "available_seats": seats_data.get("available_seats", []),
-        "source": "external-provider",
-        "cached": False
-    }
-
-    # Сохраняем в кэш
-    _seats_cache[event_id] = (now, response_payload)
-    return response_payload
+    _seats_cache[cache_key] = (time.time(), seats_data)
+    return seats_data
 
 
-# --- Регистрация (POST /api/tickets) ---
+# --- Регистрация (через UseCase) ---
 @app.post("/api/tickets", status_code=201)
-def register_ticket(
-    ticket: TicketRequest,          # <-- ГЛАВНОЕ ИЗМЕНЕНИЕ: принимаем JSON-объект целиком
-    db: Session = Depends(get_db) # noqa: B008
-):
-    # 1. Проверка существования события
-    event_stmt = select(Event).where(Event.id == ticket.event_id)
-    event = db.execute(event_stmt).scalars().first()
-    
-    if not event:
-        raise HTTPException(status_code=404, detail="Событие не найдено")
-    
-    # 2. Проверка статуса (только published)
-    if event.status != "published":
-        raise HTTPException(
-            status_code=403, 
-            detail=f"Нельзя регистрироваться на неопубликованное событие. Статус: {event.status}"
+async def register_ticket(ticket: TicketRequest, db: Session = Depends(get_db)):
+    event_repo = EventRepository(db)
+    ticket_repo = RegistrationRepository(db)
+
+    usecase = TicketRegistrationUseCase(
+        event_repo=event_repo,
+        ticket_repo=ticket_repo,
+        client=client,
+    )
+
+    try:
+        result = await usecase.do(
+            first_name=ticket.first_name,
+            last_name=ticket.last_name,
+            email=ticket.email,
+            event_id=ticket.event_id,  # Это уже UUID благодаря Pydantic
+            seat=ticket.seat,
         )
-    
-    # 3. Проверка дедлайна регистрации
-    if event.registration_deadline:
-        now_utc = datetime.now(UTC)
-        if now_utc > event.registration_deadline:
-            raise HTTPException(status_code=403, detail="Срок регистрации истек")
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        msg = str(e)
+        status_code = int(msg.split(":")[0]) if ":" in msg else 500
+        detail = msg.split(":", 1)[1] if ":" in msg else msg
+        raise HTTPException(status_code=status_code, detail=detail)
 
-    logger.info(f"🎫 Попытка регистрации места {ticket.seat} для события {ticket.event_id}...")
 
-    # 4. Вызов внешнего провайдера через твой HTTP-клиент
-    result, error = client.register_ticket(
-        event_id=ticket.event_id, 
-        seat=ticket.seat, 
-        email=ticket.email,
-        first_name=ticket.first_name,
-        last_name=ticket.last_name
-    )
-
-    # 5. Обработка ошибок от провайдера
-    if error:
-        # Если место занято или уже зарегистрировано — 409 Conflict, иначе 400
-        status_code = 409 if ("already" in error.lower() or "taken" in error.lower()) else 400
-        raise HTTPException(status_code=status_code, detail=error)
-
-    # Генерируем ticket_id, если провайдер его не вернул
-    ticket_id = result.get("ticket_id") or uuid.uuid4()
-
-    # 6. Сохраняем регистрацию в свою БД
-    new_reg = Registration(
-        ticket_id=ticket_id,
-        event_id=event.id,
-        email=ticket.email,
-        first_name=ticket.first_name,
-        last_name=ticket.last_name,
-        seat=ticket.seat,
-        status="active"
-    )
-    
-    db.add(new_reg)
-    try:
-        db.commit()
-        db.refresh(new_reg)
-    except SQLAlchemyError as e:
-        db.rollback()
-        logger.error(f"Ошибка сохранения регистрации в БД: {e}")
-        raise HTTPException(status_code=500, detail="Не удалось сохранить регистрацию в базе данных")
-
-    logger.info(f"✅ Регистрация успешно сохранена в БД: {ticket_id}")
-    
-    return {
-        "ticket_id": str(ticket_id),
-        "status": "registered",
-        "message": "Регистрация успешна",
-        "seat": ticket.seat
-    }
-
-# --- Отмена регистрации (DELETE /api/tickets/{ticket_id}) ---
+# --- Отмена регистрации (через UseCase) ---
 @app.delete("/api/tickets/{ticket_id}")
-def cancel_ticket(ticket_id: str, db: Session = Depends(get_db)):  # noqa: B008
-    stmt = select(Registration).where(Registration.ticket_id == ticket_id)
-    reg = db.execute(stmt).scalars().first()
-    
-    if not reg:
-        raise HTTPException(status_code=404, detail="Билет не найден")
-    
-    if reg.status == "cancelled":
-        return {"success": True, "message": "Билет уже отменен"}
-    
-    event_stmt = select(Event).where(Event.id == reg.event_id)
-    event = db.execute(event_stmt).scalars().first()
-    if not event:
-         raise HTTPException(status_code=404, detail="Связанное событие не найдено в БД")
+def cancel_ticket(ticket_id: str, db: Session = Depends(get_db)):
+    event_repo = EventRepository(db)
+    ticket_repo = RegistrationRepository(db)
 
-    logger.info(f"🔄 Отмена билета {ticket_id} у провайдера...")
-    _, error = client.unregister_ticket(event_id=reg.event_id, ticket_id=ticket_id)
+    usecase = TicketCancellationUseCase(
+        event_repo=event_repo,
+        ticket_repo=ticket_repo,
+        client=client,
+    )
 
-    if error:
-        logger.warning(f"Провайдер вернул ошибку при отмене: {error}")
-        raise HTTPException(status_code=502, detail=f"Не удалось отменить регистрацию у провайдера: {error}")
-
-    reg.status = "cancelled"
     try:
-        db.commit()
-    except SQLAlchemyError as e:
-        db.rollback()
-        logger.error(f"Ошибка обновления статуса в БД: {e}")
-        raise HTTPException(status_code=500, detail="Не удалось обновить статус в базе данных")
-    
-    return {
-        "success": True, 
-        "ticket_id": ticket_id, 
-        "message": "Отмена успешна"
-    }
-
-# --- Список событий (с пагинацией и фильтрацией) ---
-@app.get("/api/events")
-def get_events(
-    page: int = 1,
-    page_size: int = 20,
-    date_from: str | None = None,
-    db: Session = Depends(get_db), # noqa: B008
-): 
-    page = max(page, 1)
-    if page_size < 1 or page_size > 100:
-        page_size = 20
-
-    offset = (page - 1) * page_size
-
-    count_stmt = select(func.count()).select_from(Event)
-    dt = None
-    
-    if date_from:
-        try:
-            dt = datetime.strptime(date_from, "%Y-%m-%d")
-            dt = dt.replace(tzinfo=UTC)
-            count_stmt = count_stmt.where(Event.event_time >= dt)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Неверный формат date_from. Используйте YYYY-MM-DD")
-
-    total = db.execute(count_stmt).scalar() or 0
-
-    stmt = select(Event).order_by(Event.event_time.desc())
-    if dt:
-        stmt = stmt.where(Event.event_time >= dt)
-    stmt = stmt.limit(page_size).offset(offset)
-    results = db.execute(stmt).scalars().all()
-
-    def format_event(ev: Event) -> dict[str, Any]:
-        place = None
-        if ev.place_id:
-            place = {
-                "id": str(ev.place_id) if ev.place_id else None,
-                "name": ev.place_name,
-                "city": ev.city,
-                "address": ev.address,
-            }
-        return {
-            "id": str(ev.id) if ev.id else None,
-            "name": ev.name,
-            "place": place,
-            "event_time": ev.event_time.isoformat() if ev.event_time else None,
-            "registration_deadline": ev.registration_deadline.isoformat() if ev.registration_deadline else None,
-            "status": ev.status,
-            "number_of_visitors": ev.number_of_visitors,
-        }
-
-    items = [format_event(ev) for ev in results]
-    base_url = "http://localhost:8000"
-    next_page = None
-    if (offset + page_size) < total:
-        next_page = f"{base_url}/api/events?page={page + 1}&page_size={page_size}"
-        if date_from:
-            next_page += f"&date_from={date_from}"
-
-    previous_page = None
-    if page > 1:
-        previous_page = f"{base_url}/api/events?page={page - 1}&page_size={page_size}"
-        if date_from:
-            previous_page += f"&date_from={date_from}"
-
-    return {
-        "count": total,
-        "next": next_page,
-        "previous": previous_page,
-        "results": items,
-    }
-
-@app.get("/debug/stats")
-def get_stats(db: Session = Depends(get_db)):  # noqa: B008
-    total_events_stmt = select(func.count()).select_from(Event)
-    total_sync_stmt = select(func.count()).select_from(SyncMetadata)
-    
-    total_events = db.execute(total_events_stmt).scalar() or 0
-    total_sync = db.execute(total_sync_stmt).scalar() or 0
-    
-    return {
-        "total_events": total_events,
-        "total_sync_records": total_sync,
-        "message": "Данные синхронизированы успешно!"
-    }
+        result = usecase.do(ticket_id=ticket_id)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        msg = str(e)
+        if ":" in msg:
+            status_code = int(msg.split(":")[0])
+            detail = msg.split(":", 1)[1]
+            raise HTTPException(status_code=status_code, detail=detail)
+        raise HTTPException(status_code=500, detail=msg)
