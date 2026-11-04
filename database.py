@@ -5,27 +5,29 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 # Загружаем переменные из .env. Если файла нет — переменные не появятся,
-# и дальше сработает проверка на отсутствие DATABASE_URL.
+# а приложение всё равно стартует: падать будем только при обращении к базе.
 load_dotenv()
 
+DATABASE_URL = os.getenv("DATABASE_URL", "")
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+if DATABASE_URL:
+    engine = create_engine(DATABASE_URL, echo=False)
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+else:
+    # На платформе .env нет (он в .dockerignore) — не роняем старт,
+    # а просто не создаём подключение. Любой запрос к базе ответит ошибкой.
+    engine = None
+    SessionLocal = None
 
-if not DATABASE_URL:
-    raise RuntimeError(
-        "Не найдена переменная DATABASE_URL в файле .env. "
-        "Создай файл .env в корне проекта и добавь туда строку: "
-        "DATABASE_URL=postgresql+psycopg2://postgres:secret@localhost:5432/event_aggregator"
-    )
-
-engine = create_engine(DATABASE_URL, echo=False)
-
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def get_db():
+    if SessionLocal is None:
+        raise RuntimeError(
+            "База данных не настроена: переменная DATABASE_URL не задана. "
+            "Укажи её в переменных окружения сервиса."
+        )
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
-

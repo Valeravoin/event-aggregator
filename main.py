@@ -68,6 +68,9 @@ async def startup():
     logger.info("🚀 Приложение EventAggregator запущено.")
 
     async def _startup_sync():
+        if SessionLocal is None:
+            logger.warning("DATABASE_URL не задан — стартовая синхронизация пропущена")
+            return
         with SessionLocal() as db:
             try:
                 if await run_sync(db, source_name="startup-source"):
