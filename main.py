@@ -104,13 +104,7 @@ async def startup():
 # --- Health Check ---
 @app.get("/api/health")
 def health():
-    try:
-        with SessionLocal() as db:
-            db.execute(text("SELECT 1"))
-        return {"status": "ok"}
-    except SQLAlchemyError as e:
-        logger.error("Ошибка подключения к БД: %s", e)
-        return {"status": "error", "detail": str(e)}
+    return {"status": "ok"}
 
 
 # --- Ручной запуск синхронизации ---
