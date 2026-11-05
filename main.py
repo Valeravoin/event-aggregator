@@ -7,8 +7,9 @@ from uuid import UUID
 from fastapi import Depends, FastAPI, HTTPException
 from sqlalchemy.orm import Session
 
-from database import SessionLocal
+from database import SessionLocal, engine
 from http_client import EventsApiClient
+from models import Base
 
 # Слой зависимостей
 from repositories.event_repository import EventRepository
@@ -65,6 +66,18 @@ import asyncio
 async def startup():
     logger.info("🚀 Приложение EventAggregator запущено.")
 
+    # 1. Создаём таблицы, если их нет (страховка для платформы без миграций)
+    if engine is None:
+        logger.warning("База не настроена — таблицы не создаются")
+    else:
+        try:
+            Base.metadata.create_all(bind=engine)
+            logger.info("Таблицы проверены/созданы")
+        except Exception as e:
+            # Не роняем старт: если база недоступна, сервер всё равно поднимется
+            logger.error("Не удалось создать таблицы: %s", e)
+
+    # 2. Стартовая синхронизация в фоне — сервер не ждёт
     async def _startup_sync():
         if SessionLocal is None:
             logger.warning("DATABASE_URL не задан — стартовая синхронизация пропущена")
@@ -78,25 +91,14 @@ async def startup():
             except Exception:
                 logger.exception("💥 Ошибка при стартовой синхронизации")
 
-    # Запускаем в фоне — сервер не ждёт
     asyncio.create_task(_startup_sync())
 
+    # 3. Планировщик — ровно один раз
     try:
         scheduler.start()
         logger.info("🕒 Планировщик запущен: интервал 24 часа.")
     except Exception as e:
         logger.error("Не удалось запустить планировщик: %s", e)
-
-
-    # Фоновая задача: не блокируем подъём сервера
-    asyncio.create_task(_startup_sync())
-
-    try:
-        scheduler.start()
-        logger.info("🕒 Планировщик запущен: интервал 24 часа.")
-    except Exception as e:
-        logger.error("Не удалось запустить планировщик: %s", e)
-
 
 
 # --- Health Check ---
@@ -120,41 +122,47 @@ async def trigger_sync(db: Session = Depends(get_db)):
 
 # --- Список событий с пагинацией (контракт DRF: count/next/previous/results) ---
 @app.get("/api/events")
-def list_events(page: int = 1, per_page: int = 10, db: Session = Depends(get_db)):
-    if page < 1:
-        raise HTTPException(status_code=400, detail="page должна быть >= 1")
-    if not (1 <= per_page <= 100):
-        raise HTTPException(status_code=400, detail="per_page должна быть от 1 до 100")
+def get_events(
+    page: int = 1,
+    per_page: int = 10,
+    db: Session = Depends(get_db),
+):
+    try:
+        repo = EventRepository(db)
+        total = repo.count_events()
+        events = repo.get_events_page(offset=(page - 1) * per_page, limit=per_page)
 
-    repo = EventRepository(db)
-    total = repo.count_events()
-    events = repo.get_events_page(offset=(page - 1) * per_page, limit=per_page)
+        def _page_url(p: int):
+            if p < 1 or (p - 1) * per_page >= total:
+                return None
+            return f"/api/events?{urlencode({'page': p, 'per_page': per_page})}"
 
-    def _page_url(p: int):
-        if p < 1 or (p - 1) * per_page >= total:
-            return None
-        return f"/api/events?{urlencode({'page': p, 'per_page': per_page})}"
+        return {
+            "count": total,
+            "next": _page_url(page + 1),
+            "previous": _page_url(page - 1),
+            "results": [
+                {
+                    "id": str(ev.id),
+                    "name": ev.name,
+                    "place_name": ev.place_name,
+                    "city": ev.city,
+                    "event_time": (
+                        ev.event_time.isoformat() if ev.event_time else None
+                    ),
+                    "registration_deadline": (
+                        ev.registration_deadline.isoformat()
+                        if ev.registration_deadline else None
+                    ),
+                    "status": ev.status,
+                }
+                for ev in events
+            ],
+        }
+    except Exception as e:
+        # ВРЕМЕННО, для диагностики — потом уберём
+        return {"error": str(e)}
 
-    return {
-        "count": total,
-        "next": _page_url(page + 1),
-        "previous": _page_url(page - 1),
-        "results": [
-            {
-                "id": str(ev.id),
-                "name": ev.name,
-                "place_name": ev.place_name,
-                "city": ev.city,
-                "event_time": ev.event_time.isoformat() if ev.event_time else None,
-                "registration_deadline": (
-                    ev.registration_deadline.isoformat()
-                    if ev.registration_deadline else None
-                ),
-                "status": ev.status,
-            }
-            for ev in events
-        ],
-    }
 
 
 # --- Детали события ---
