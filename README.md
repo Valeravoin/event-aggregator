@@ -9,41 +9,47 @@
 - Python 3.10+
 - PostgreSQL (локальный сервер)
 - Локальная установка зависимостей (через `venv`)
+- 🐳 Дополнительно (для деплоя): Docker (версия 20.10+) и Docker Compose (v2+).
+- В проекте есть готовый Dockerfile и docker-compose.yml для запуска в изолированной среде.
 
 > 💡 **Важно:** Перед запуском нужно вручную создать базу данных `event_aggregator` в PostgreSQL. Скрипты проекта не создают саму БД, только таблицы внутри неё.
 
 ## Клонирование и настройка
+
+# Клонирование
 
 ```bash
 git clone <ССЫЛКА_НА_ТВОЙ_РЕПОЗИТОРИЙ>
 cd event-aggregator
 ```
 
-## Создание виртуального окружения и установка зависимостей
+# Создание виртуального окружения
 
 ```bash
 python -m venv venv
-venv\Scripts\activate
-pip install -r requirements.txt
 ```
 
-### Настройка переменных окружения
-
-Скопируй шаблон в рабочий файл:
+# Активация (выбери свою ОС)
+# Windows (PowerShell):
 ```bash
-cp .env.example .env
+.\venv\Scripts\Activate.ps1
 ```
-
-Открой файл .env и заполни переменные. Не используй кавычки, если в примере их нет.
-```basch
-DATABASE_URL=postgresql+psycopg2://postgres:ТВОЙ_ПАРОЛЬ@localhost:5432/event_aggregator
-EVENTS_PROVIDER_BASE_URL=https://events-provider.dev-2.python-labs.ru
-EVENTS_PROVIDER_API_KEY=твой_api_ключ
-
+# Windows (CMD):
+```bash
+venv\Scripts\activate.bat
+```
+# macOS / Linux:
+```bash
+source venv/bin/activate
+```
+# Установка зависимостей
+```bash
+pip install -r requirements.txt
 ```
 
 ### Применение миграций базы данных
 
+✅ Перед миграциями: Убедитесь, что база данных event_aggregator уже создана в PostgreSQL (скрипт не создаёт саму БД, только таблицы).
 Так как проект использует Alembic, нужно применить миграции, чтобы создать таблицы в базе:
 ```bash
 alembic upgrade head
@@ -83,6 +89,8 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 - **Логирование с контекстом**: каждый запрос и ошибка содержат `event_id`, `ticket_id` и источник проблемы.
 - **Контроль качества кода**: CI (GitHub Actions) требует прохождения ruff/isort перед деплоем.
 - **Валидация входа**: Pydantic‑схемы обеспечивают строгую проверку JSON до бизнес‑логики.
+- **Тестируемость**: полный набор интеграционных тестов (pytest) покрывает сценарии регистрации, отмены и синхронизации.
+- **Непрерывная интеграция**: GitHub Actions автоматически проверяет код линтерами (ruff, isort) и запускает тесты перед каждым деплоем.
 
 
 ### 📦 Зависимости
@@ -96,7 +104,20 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 - `pydantic` — валидация входных данных.
 - `pytest`, `ruff`, `isort` — тестирование и контроль качества кода.
 
-💡 Совет: Чтобы установить все зависимости в виртуальном окружении, выполните:
+
+### 🚀 Запуск в Docker (Production / LMS)
+Для запуска в контейнеризированной среде (как на платформе LMS):
 ```bash
-pip install -r requirements.txt
+docker build -t event-aggregator .
+docker run -d --name event-app \
+  -e DATABASE_URL=postgresql+psycopg2://... \
+  -e EVENTS_PROVIDER_BASE_URL=... \
+  -e EVENTS_PROVIDER_API_KEY=... \
+  -p 8000:8000 \
+  event-aggregator
 ```
+**Или через compose**:
+```bash
+docker-compose up -d --build
+```
+💡 Важно для миграции в Docker: При первом запуске контейнера миграции должны применяться автоматически. Если в Dockerfile или entrypoint.sh нет команды alembic upgrade head, её нужно добавить в точку входа, иначе приложение упадёт при старте из-за отсутствия таблиц.
