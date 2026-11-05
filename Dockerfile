@@ -12,6 +12,5 @@ COPY . .
 EXPOSE 8000
 
 # Миграции с повторами (база может подниматься позже контейнера), затем запуск сервера
-CMD ["sh", "-c", "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"]
-
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 
