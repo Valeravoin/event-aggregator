@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 from typing import Any
@@ -7,11 +8,9 @@ from uuid import UUID
 from fastapi import Depends, FastAPI, HTTPException
 from sqlalchemy.orm import Session
 
-from database import SessionLocal, engine
+from database import SessionLocal, engine, get_db
 from http_client import EventsApiClient
-from models import Base
-
-# Слой зависимостей
+from models import Base, Registration
 from repositories.event_repository import EventRepository
 from repositories.registration_repository import RegistrationRepository
 from scheduler import create_scheduler
@@ -27,22 +26,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- ГЛОБАЛЬНЫЙ КЛИЕНТ (КРИТИЧНО ДЛЯ ТЕСТОВ) ---
+# --- ГЛОБАЛЬНЫЙ КЛИЕНТ ---
 # Создаём на уровне модуля, чтобы тесты могли делать patch.object(main.client, ...).
-# Оборачиваем в try/except: если env не задан, модуль НЕ должен упасть —
-# иначе uvicorn не стартует и nginx отдаёт 502/503 на все запросы.
+# Если env не задан — модуль не падает, иначе uvicorn не стартует и nginx отдаёт 502/503.
 client: EventsApiClient | None = None
 try:
     if not EVENTS_PROVIDER_BASE_URL:
-        logger.error("❌ EVENTS_PROVIDER_BASE_URL не установлен в переменных окруженияx!")
+        logger.error("❌ EVENTS_PROVIDER_BASE_URL не установлен в переменных окружения!")
     else:
         client = EventsApiClient(base_url=EVENTS_PROVIDER_BASE_URL)
         logger.info("✅ Глобальный клиент EventsApiClient создан")
 except Exception:
     logger.exception("💥 Не удалось создать EventsApiClient — проверь env на платформе")
 
-
-# --- КЭШ МЕСТ ---
+# --- Кэш мест ---
 _seats_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 CACHE_TTL = 30
 
@@ -50,16 +47,7 @@ scheduler = create_scheduler()
 
 app = FastAPI(title="EventAggregator LMS")
 
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-import asyncio
+# get_db берём из database.py — там есть защита от не настроенной базы
 
 
 @app.on_event("startup")
@@ -74,7 +62,6 @@ async def startup():
             Base.metadata.create_all(bind=engine)
             logger.info("Таблицы проверены/созданы")
         except Exception as e:
-            # Не роняем старт: если база недоступна, сервер всё равно поднимется
             logger.error("Не удалось создать таблицы: %s", e)
 
     # 2. Стартовая синхронизация в фоне — сервер не ждёт
@@ -120,49 +107,58 @@ async def trigger_sync(db: Session = Depends(get_db)):
     return {"status": "failed", "message": "Синхронизация завершилась с ошибкой (см. логи)"}
 
 
-# --- Список событий с пагинацией (контракт DRF: count/next/previous/results) ---
+# --- Список событий с пагинацией (контракт: count/next/previous/results) ---
 @app.get("/api/events")
 def get_events(
     page: int = 1,
-    per_page: int = 10,
+    page_size: int = 10,
+    per_page: int | None = None,
     db: Session = Depends(get_db),
 ):
-    try:
-        repo = EventRepository(db)
-        total = repo.count_events()
-        events = repo.get_events_page(offset=(page - 1) * per_page, limit=per_page)
+    # Тестовый контракт использует page_size, старый клиент — per_page
+    size = per_page if per_page is not None else page_size
+    if page < 1:
+        page = 1
+    if size < 1:
+        size = 10
 
-        def _page_url(p: int):
-            if p < 1 or (p - 1) * per_page >= total:
-                return None
-            return f"/api/events?{urlencode({'page': p, 'per_page': per_page})}"
+    repo = EventRepository(db)
+    total = repo.count_events()
+    events = repo.get_events_page(offset=(page - 1) * size, limit=size)
 
-        return {
-            "count": total,
-            "next": _page_url(page + 1),
-            "previous": _page_url(page - 1),
-            "results": [
-                {
-                    "id": str(ev.id),
-                    "name": ev.name,
-                    "place_name": ev.place_name,
+    def _page_url(p: int):
+        if p < 1 or (p - 1) * size >= total:
+            return None
+        return f"/api/events?{urlencode({'page': p, 'page_size': size})}"
+
+    return {
+        "count": total,
+        "next": _page_url(page + 1),
+        "previous": _page_url(page - 1),
+        "results": [
+            {
+                "id": str(ev.id),
+                "name": ev.name,
+                "place": {
+                    "id": str(ev.place_id) if ev.place_id else None,
+                    "name": ev.place_name,
                     "city": ev.city,
-                    "event_time": (
-                        ev.event_time.isoformat() if ev.event_time else None
-                    ),
-                    "registration_deadline": (
-                        ev.registration_deadline.isoformat()
-                        if ev.registration_deadline else None
-                    ),
-                    "status": ev.status,
-                }
-                for ev in events
-            ],
-        }
-    except Exception as e:
-        # ВРЕМЕННО, для диагностики — потом уберём
-        return {"error": str(e)}
-
+                    "address": ev.address,
+                    "seats_pattern": ev.seats_pattern,
+                },
+                "event_time": (
+                    ev.event_time.isoformat() if ev.event_time else None
+                ),
+                "registration_deadline": (
+                    ev.registration_deadline.isoformat()
+                    if ev.registration_deadline else None
+                ),
+                "status": ev.status,
+                "number_of_visitors": ev.number_of_visitors,
+            }
+            for ev in events
+        ],
+    }
 
 
 # --- Детали события ---
@@ -181,7 +177,7 @@ def get_event_details(event_id: UUID, db: Session = Depends(get_db)):
             "name": event.place_name,
             "city": event.city,
             "address": event.address,
-            "seats_pattern": event.seats_pattern,  # реальное значение из синка
+            "seats_pattern": event.seats_pattern,
         }
 
     return {
@@ -189,8 +185,10 @@ def get_event_details(event_id: UUID, db: Session = Depends(get_db)):
         "name": event.name,
         "place": place,
         "event_time": event.event_time.isoformat() if event.event_time else None,
-        "registration_deadline": event.registration_deadline.isoformat()
-            if event.registration_deadline else None,
+        "registration_deadline": (
+            event.registration_deadline.isoformat()
+            if event.registration_deadline else None
+        ),
         "status": event.status,
         "number_of_visitors": event.number_of_visitors,
     }
@@ -205,7 +203,7 @@ async def get_available_seats(event_id: UUID, db: Session = Depends(get_db)):
     if cache_key in _seats_cache:
         ts, cached_data = _seats_cache[cache_key]
         if now - ts < CACHE_TTL:
-            logger.info(f"💾 Возвращаем данные из кэша для события {cache_key}")
+            logger.info("💾 Возвращаем данные из кэша для события %s", cache_key)
             return cached_data
 
     repo = EventRepository(db)
@@ -217,14 +215,64 @@ async def get_available_seats(event_id: UUID, db: Session = Depends(get_db)):
     if event.status != "published":
         raise HTTPException(
             status_code=403,
-            detail=f"Регистрация возможна только для опубликованных событий. Статус: {event.status}"
+            detail=(
+                "Регистрация возможна только для опубликованных событий. "
+                f"Статус: {event.status}"
+            )
         )
 
-    logger.info(f"🌐 Запрос свободных мест у Events Provider для {cache_key}")
     if client is None:
-        raise HTTPException(status_code=503, detail="Клиент провайдера не инициализирован: проверьте EVENTS_PROVIDER_* переменные")
+        raise HTTPException(
+            status_code=503,
+            detail="Клиент провайдера не инициализирован: проверьте EVENTS_PROVIDER_* переменные"
+        )
+
+    logger.info("🌐 Запрос свободных мест у Events Provider для %s", cache_key)
     seats_data, error = await client.get_seats(event_id)
 
+    if error is not None:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Провайдер мест недоступен: {error}"
+        )
+
+    # Нормализуем ответ провайдера в список мест
+    raw = seats_data
+    if isinstance(raw, dict):
+        raw = raw.get("available_seats", raw.get("seats", []))
+
+    seats: list[Any] = []
+    if isinstance(raw, list):
+        for s in raw:
+            if isinstance(s, str):
+                seats.append(s)
+            elif isinstance(s, dict):
+                seat_value = (
+                    s.get("seat")
+                    or s.get("number")
+                    or s.get("id")
+                )
+                if seat_value is not None:
+                    seats.append(seat_value)
+
+    # Убираем уже занятые места (активные регистрации)
+    taken = {
+        r.seat
+        for r in db.query(Registration)
+        .filter(Registration.event_id == event_id)
+        .filter(Registration.status == "active")
+        .all()
+        if r.seat is not None
+    }
+    available = [s for s in seats if s not in taken]
+
+    response = {
+        "event_id": str(event_id),
+        "available_seats": available,
+    }
+
+    _seats_cache[cache_key] = (now, response)
+    return response
 
 
 # --- Регистрация (через UseCase) ---
@@ -263,7 +311,7 @@ async def register_ticket(ticket: TicketRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=status_code, detail=detail)
 
 
-
+# --- Отмена регистрации (через UseCase) ---
 # --- Отмена регистрации (через UseCase) ---
 @app.delete("/api/tickets/{ticket_id}")
 def cancel_ticket(ticket_id: str, db: Session = Depends(get_db)):
@@ -283,7 +331,7 @@ def cancel_ticket(ticket_id: str, db: Session = Depends(get_db)):
     )
 
     try:
-        result = usecase.do(ticket_id=ticket_id)
+        result = usecase.do(ticket_id=ticket_id)  # синхронный вызов, без await
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
