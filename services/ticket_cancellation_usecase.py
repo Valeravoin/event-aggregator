@@ -1,6 +1,10 @@
+import logging
+
 from http_client import EventsApiClient
 from repositories.event_repository import EventRepository
 from repositories.registration_repository import RegistrationRepository
+
+logger = logging.getLogger(__name__)
 
 
 class TicketCancellationUseCase:
@@ -25,10 +29,13 @@ class TicketCancellationUseCase:
         if not event:
             raise RuntimeError("Внутренняя несогласованность: событие не найдено для билета")
 
+        # Провайдер знает только свой ID билета — внешний, полученный при регистрации
+        provider_ticket_id = reg.external_ticket_id or ticket_id
         _, error = await self.client.unregister_ticket(
-            event_id=str(event.id), ticket_id=ticket_id
+            event_id=str(event.id), ticket_id=provider_ticket_id
         )
         if error:
+            logger.error("💥 Провайдер ответил ошибкой на отмену: %s", error)
             raise RuntimeError(f"502:{error}")
 
         self.ticket_repo.update_status(reg, "cancelled")
