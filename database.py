@@ -24,7 +24,7 @@ if not DATABASE_URL or "localhost" in DATABASE_URL:
         host = os.getenv("POSTGRES_HOST", "")
         port = os.getenv("POSTGRES_PORT", "5432")
         name = os.getenv("POSTGRES_DATABASE_NAME", "")
-        
+
         if host and name:
             DATABASE_URL = f"postgresql+psycopg2://{user}:{pwd}@{host}:{port}/{name}"
 
