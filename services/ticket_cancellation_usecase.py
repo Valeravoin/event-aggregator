@@ -14,7 +14,7 @@ class TicketCancellationUseCase:
         self.ticket_repo = ticket_repo
         self.client = client
 
-    def do(self, ticket_id: str) -> dict:
+    async def do(self, ticket_id: str) -> dict:
         reg = self.ticket_repo.get_by_ticket_id(ticket_id)
         if not reg:
             raise ValueError("Билет не найден")
@@ -25,7 +25,9 @@ class TicketCancellationUseCase:
         if not event:
             raise RuntimeError("Внутренняя несогласованность: событие не найдено для билета")
 
-        _, error = self.client.unregister_ticket(event_id=str(event.id), ticket_id=ticket_id)
+        _, error = await self.client.unregister_ticket(
+            event_id=str(event.id), ticket_id=ticket_id
+        )
         if error:
             raise RuntimeError(f"502:{error}")
 

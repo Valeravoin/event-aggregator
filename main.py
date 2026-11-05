@@ -19,6 +19,10 @@ from services.ticket_cancellation_usecase import TicketCancellationUseCase
 from services.ticket_registration_usecase import TicketRegistrationUseCase
 from settings import EVENTS_PROVIDER_BASE_URL
 from sync_runner import run_sync
+from fastapi import Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,6 +51,18 @@ scheduler = create_scheduler()
 
 app = FastAPI(title="EventAggregator LMS")
 
+
+@app.exception_handler(RequestValidationError)
+async def validation_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=400,
+        content={
+            "detail": [
+                {"loc": e.get("loc"), "msg": e.get("msg")}
+                for e in exc.errors()
+            ]
+        },
+    )
 # get_db берём из database.py — там есть защита от не настроенной базы
 
 
@@ -311,10 +327,10 @@ async def register_ticket(ticket: TicketRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=status_code, detail=detail)
 
 
-# --- Отмена регистрации (через UseCase) ---
+
 # --- Отмена регистрации (через UseCase) ---
 @app.delete("/api/tickets/{ticket_id}")
-def cancel_ticket(ticket_id: str, db: Session = Depends(get_db)):
+async def cancel_ticket(ticket_id: str, db: Session = Depends(get_db)):
     if client is None:
         raise HTTPException(
             status_code=503,
@@ -331,7 +347,7 @@ def cancel_ticket(ticket_id: str, db: Session = Depends(get_db)):
     )
 
     try:
-        result = usecase.do(ticket_id=ticket_id)  # синхронный вызов, без await
+        result = await usecase.do(ticket_id=ticket_id)
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -342,3 +358,7 @@ def cancel_ticket(ticket_id: str, db: Session = Depends(get_db)):
             detail = msg.split(":", 1)[1]
             raise HTTPException(status_code=status_code, detail=detail)
         raise HTTPException(status_code=500, detail=msg)
+    except Exception as e:
+        # Временный «рентген»: покажет реальную причину, если 500 останется
+        logger.exception("💥 Отмена тикета упала")
+        raise HTTPException(status_code=500, detail=str(e))
