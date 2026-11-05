@@ -5,7 +5,9 @@ from typing import Any
 from urllib.parse import urlencode
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from database import SessionLocal, engine, get_db
@@ -19,10 +21,6 @@ from services.ticket_cancellation_usecase import TicketCancellationUseCase
 from services.ticket_registration_usecase import TicketRegistrationUseCase
 from settings import EVENTS_PROVIDER_BASE_URL
 from sync_runner import run_sync
-from fastapi import Request
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
-
 
 logging.basicConfig(
     level=logging.INFO,
