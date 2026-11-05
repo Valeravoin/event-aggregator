@@ -21,7 +21,8 @@ class TicketCancellationUseCase:
     async def do(self, ticket_id: str) -> dict:
         reg = self.ticket_repo.get_by_ticket_id(ticket_id)
         if not reg:
-            raise ValueError("Билет не найден")
+            # Несуществующий билет — это 404 Not Found, а не 400
+            raise RuntimeError("404:Билет не найден")
         if reg.status == "cancelled":
             return {"success": True, "message": "Билет уже отменён", "ticket_id": ticket_id}
 
