@@ -1,7 +1,7 @@
 # repositories/event_repository.py
 from datetime import UTC
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from models import Event
@@ -37,8 +37,16 @@ class EventRepository:
 
         total = self.session.execute(count_stmt).scalar() or 0
 
-        # Теперь выбираем сами события
-        stmt = select(Event).order_by(Event.event_time.desc())
+        # Теперь выбираем сами события — published и актуальные первыми
+        status_priority = case(
+            (Event.status == "published", 0),
+            (Event.status == "registration_closed", 1),
+            else_=2,  # finished — в конец списка
+        )
+        stmt = select(Event).order_by(
+            status_priority,
+            Event.event_time.asc().nulls_last(),
+        )
         if dt:
             stmt = stmt.where(Event.event_time >= dt)
         stmt = stmt.limit(page_size).offset(offset)
@@ -50,12 +58,19 @@ class EventRepository:
         stmt = select(func.count()).select_from(Event)
         return self.session.execute(stmt).scalar() or 0
 
-
     def get_events_page(self, offset: int, limit: int) -> list[Event]:
-        """Возвращает страницу событий, отсортированных по дате."""
+        """Возвращает страницу событий: published первыми, затем по времени."""
+        status_priority = case(
+            (Event.status == "published", 0),
+            (Event.status == "registration_closed", 1),
+            else_=2,  # finished — в конец списка
+        )
         stmt = (
             select(Event)
-            .order_by(Event.event_time.asc())
+            .order_by(
+                status_priority,
+                Event.event_time.asc().nulls_last(),
+            )
             .offset(offset)
             .limit(limit)
         )
