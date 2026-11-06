@@ -3,22 +3,36 @@ from urllib.parse import quote_plus
 
 from dotenv import load_dotenv
 
+# Единственная точка загрузки .env во всём приложении.
+# Все остальные модули получают конфигурацию только через импорт settings.
 load_dotenv()
 
 
-def _build_database_url() -> str:
-    # Локально используем DATABASE_URL из .env, если он задан
-    url = os.getenv("DATABASE_URL")
-    if url:
-        return url
+def _build_database_url() -> str | None:
+    """Собирает строку подключения к БД.
 
-    # На платформе LMS база описывается переменными POSTGRES_*
-    user = os.getenv("POSTGRES_USERNAME", "postgres")
-    password = quote_plus(os.getenv("POSTGRES_PASSWORD", "secret"))
-    host = os.getenv("POSTGRES_HOST", "localhost")
-    port = os.getenv("POSTGRES_PORT", "5432")
-    name = os.getenv("POSTGRES_DATABASE_NAME", "event_aggregator")
-    return f"postgresql://{user}:{password}@{host}:{port}/{name}"
+    Приоритет: DATABASE_URL из окружения -> POSTGRES_CONNECTION_STRING
+    (строка от платформы LMS) -> отдельные переменные POSTGRES_*.
+    Если настроить базу не удалось — возвращает None.
+    """
+    url = os.getenv("DATABASE_URL", "")
+
+    # Пустая или локальная строка может быть перекрыта платформенной
+    if not url or "localhost" in url:
+        conn = os.getenv("POSTGRES_CONNECTION_STRING", "")
+        if conn:
+            # SQLAlchemy 2.x требует postgresql+psycopg2://, платформа даёт postgres://
+            return conn.replace("postgres://", "postgresql+psycopg2://", 1)
+
+        user = os.getenv("POSTGRES_USERNAME", "")
+        host = os.getenv("POSTGRES_HOST", "")
+        name = os.getenv("POSTGRES_DATABASE_NAME", "")
+        if host and name:
+            pwd = quote_plus(os.getenv("POSTGRES_PASSWORD", ""))
+            port = os.getenv("POSTGRES_PORT", "5432")
+            return f"postgresql+psycopg2://{user}:{pwd}@{host}:{port}/{name}"
+
+    return url or None
 
 
 DATABASE_URL = _build_database_url()

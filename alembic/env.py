@@ -1,17 +1,10 @@
 
 from logging.config import fileConfig
 
-from dotenv import load_dotenv
-
-from alembic import context
-
-# ВАЖНО: load_dotenv() должен отработать ДО импорта database,
-# чтобы DATABASE_URL уже лежала в os.environ на момент создания движка
-load_dotenv()
-
 # Твой движок из database.py
 # Это важно: чтобы autogenerate видел твои модели (Event, SyncMetadata, Registration)
 import models  # noqa: F401
+from alembic import context
 from database import engine
 from models import Base
 
