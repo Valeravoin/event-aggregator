@@ -1,8 +1,30 @@
+import enum
+
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
+
+
+class EventStatus(str, enum.Enum):
+    """Статусы события. Унаследован от str — удобно сериализуется в JSON и сравнивается со строками."""
+
+    PUBLISHED = "published"
+    CANCELLED = "cancelled"
+
+
+class TicketStatus(str, enum.Enum):
+    """Статусы регистрации (билета)."""
+
+    ACTIVE = "active"
+    CANCELLED = "cancelled"
+
+
+class SyncStatus(str, enum.Enum):
+    """Статусы синхронизации с провайдером."""
+
+    IDLE = "idle"
 
 
 class SyncMetadata(Base):
@@ -17,7 +39,7 @@ class SyncMetadata(Base):
     # func.now() — время ставится в момент INSERT/UPDATE на стороне БД
     last_changed_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
-    sync_status = Column(String, default="idle", nullable=False)
+    sync_status = Column(String, default=SyncStatus.IDLE.value, nullable=False)
     events_processed = Column(Integer, default=0, nullable=False)
     # Храним максимум changed_at провайдера — база для инкрементального синка
     last_event_time = Column(DateTime(timezone=True), nullable=True)
@@ -37,7 +59,7 @@ class Event(Base):
     seats_pattern = Column(String)
     event_time = Column(DateTime(timezone=True))
     registration_deadline = Column(DateTime(timezone=True))
-    status = Column(String)
+    status = Column(String, default=EventStatus.PUBLISHED.value)
     number_of_visitors = Column(Integer, default=0)
     last_changed_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
@@ -69,7 +91,7 @@ class Registration(Base):
     first_name = Column(String)
     last_name = Column(String)
     seat = Column(String)
-    status = Column(String, default="active", nullable=False)
+    status = Column(String, default=TicketStatus.ACTIVE.value, nullable=False)
     created_at = Column(DateTime(timezone=True), default=func.now())
 
     # Обратная связь к событию

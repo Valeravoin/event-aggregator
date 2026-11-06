@@ -1,3 +1,5 @@
+from models import EventStatus
+
 
 class TicketRegistrationUseCase:
     def __init__(self, event_repo, ticket_repo, client):
@@ -9,7 +11,7 @@ class TicketRegistrationUseCase:
         event = self.event_repo.get_by_id(event_id)
         if not event:
             raise ValueError("Событие не найдено")
-        if event.status != "published":
+        if event.status != EventStatus.PUBLISHED.value:
             raise ValueError(f"Регистрация невозможна: статус события {event.status}")
 
         existing = self.ticket_repo.find_by_seat_and_event(event_id, seat)

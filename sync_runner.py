@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from http_client import EventsApiClient
-from models import Event, SyncMetadata
+from models import Event, SyncMetadata, SyncStatus
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ def get_or_create_sync_record(db: Session, source_name: str) -> SyncMetadata:
         logger.info(f"🆕 Создаю запись синхронизации для источника: {source_name}")
         record = SyncMetadata(
             source_name=source_name,
-            sync_status="idle",
+            sync_status=SyncStatus.IDLE.value,
             events_processed=0,
             last_event_time=None,
             last_sync_time=None,
@@ -137,7 +137,7 @@ async def run_sync(db: Session, source_name: str = "scheduled-source") -> bool:
         sync_record.last_sync_time = datetime.now(UTC)
         if max_changed_at:
             sync_record.last_event_time = max_changed_at
-        sync_record.sync_status = "idle"
+        sync_record.sync_status = SyncStatus.IDLE.value
         db.commit()
 
         logger.info(

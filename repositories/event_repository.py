@@ -4,7 +4,7 @@ from datetime import UTC
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
-from models import Event
+from models import Event, EventStatus
 
 
 class EventRepository:
@@ -39,7 +39,7 @@ class EventRepository:
 
         # Теперь выбираем сами события — published и актуальные первыми
         status_priority = case(
-            (Event.status == "published", 0),
+            (Event.status == EventStatus.PUBLISHED.value, 0),
             (Event.status == "registration_closed", 1),
             else_=2,  # finished — в конец списка
         )
@@ -61,7 +61,7 @@ class EventRepository:
     def get_events_page(self, offset: int, limit: int) -> list[Event]:
         """Возвращает страницу событий: published первыми, затем по времени."""
         status_priority = case(
-            (Event.status == "published", 0),
+            (Event.status == EventStatus.PUBLISHED.value, 0),
             (Event.status == "registration_closed", 1),
             else_=2,  # finished — в конец списка
         )

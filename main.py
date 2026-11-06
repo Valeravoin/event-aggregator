@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from database import SessionLocal, engine, get_db
 from http_client import EventsApiClient
-from models import Base, Registration
+from models import Base, EventStatus, Registration, TicketStatus
 from repositories.event_repository import EventRepository
 from repositories.registration_repository import RegistrationRepository
 from scheduler import create_scheduler
@@ -226,7 +226,7 @@ async def get_available_seats(event_id: UUID, db: Session = Depends(get_db)):
     if not event:
         raise HTTPException(status_code=404, detail="Событие не найдено в агрегаторе")
 
-    if event.status != "published":
+    if event.status != EventStatus.PUBLISHED.value:
         raise HTTPException(
             status_code=403,
             detail=(
@@ -274,7 +274,7 @@ async def get_available_seats(event_id: UUID, db: Session = Depends(get_db)):
         r.seat
         for r in db.query(Registration)
         .filter(Registration.event_id == event_id)
-        .filter(Registration.status == "active")
+        .filter(Registration.status == TicketStatus.ACTIVE.value)
         .all()
         if r.seat is not None
     }

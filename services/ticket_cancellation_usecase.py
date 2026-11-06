@@ -1,6 +1,7 @@
 import logging
 
 from http_client import EventsApiClient
+from models import TicketStatus
 from repositories.event_repository import EventRepository
 from repositories.registration_repository import RegistrationRepository
 
@@ -23,7 +24,7 @@ class TicketCancellationUseCase:
         if not reg:
             # Несуществующий билет — это 404 Not Found, а не 400
             raise RuntimeError("404:Билет не найден")
-        if reg.status == "cancelled":
+        if reg.status == TicketStatus.CANCELLED.value:
             return {"success": True, "message": "Билет уже отменён", "ticket_id": ticket_id}
 
         event = self.event_repo.get_by_id(str(reg.event_id))
@@ -39,7 +40,7 @@ class TicketCancellationUseCase:
             logger.error("💥 Провайдер ответил ошибкой на отмену: %s", error)
             raise RuntimeError(f"502:{error}")
 
-        self.ticket_repo.update_status(reg, "cancelled")
+        self.ticket_repo.update_status(reg, TicketStatus.CANCELLED.value)
         return {
             "success": True,
             "ticket_id": ticket_id,

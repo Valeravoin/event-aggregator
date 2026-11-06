@@ -4,7 +4,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from models import Registration
+from models import Registration, TicketStatus
 
 
 class RegistrationRepository:
@@ -24,7 +24,7 @@ class RegistrationRepository:
         last_name: str,
         seat: str,
         external_ticket_id: str | None = None,
-        status: str = "active",
+        status: str = TicketStatus.ACTIVE.value,
     ) -> Registration:
         reg = Registration(
             ticket_id=uuid4(),                     # генерируем внутренний ID здесь
