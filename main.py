@@ -270,7 +270,7 @@ async def cancel_ticket(ticket_id: str, db: Session = Depends(get_db)):
     if client is None:
         raise HTTPException(
             status_code=503,
-            detail="Клиент провайдера не инициализирован: проверьте EVENTS_PROVIDER_* переменные"
+            detail="Provider client is not initialized: check EVENTS_PROVIDER_* env variables"
         )
 
     event_repo = EventRepository(db)
@@ -285,15 +285,8 @@ async def cancel_ticket(ticket_id: str, db: Session = Depends(get_db)):
     try:
         result = await usecase.do(ticket_id=ticket_id)
         return result
-    except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-    except RuntimeError as e:
-        msg = str(e)
-        if ":" in msg:
-            status_code = int(msg.split(":")[0])
-            detail = msg.split(":", 1)[1]
-            raise HTTPException(status_code=status_code, detail=detail)
-        raise HTTPException(status_code=500, detail=msg)
+    except DomainError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.args[0])
     except Exception:
         logger.exception("💥 Неожиданная ошибка при отмене тикета")
         raise HTTPException(status_code=500, detail="Internal Server Error")
