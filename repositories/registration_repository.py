@@ -1,5 +1,5 @@
 # repositories/registration_repository.py
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -57,3 +57,16 @@ class RegistrationRepository:
         registration.status = new_status
         self.db.commit()
         self.db.refresh(registration)
+
+    def get_taken_seats(self, event_id: UUID) -> set[str]:
+        """Места с активными регистрациями по событию."""
+        rows = (
+            self.db.query(Registration.seat)
+            .filter(
+                Registration.event_id == event_id,
+                Registration.status == TicketStatus.ACTIVE.value,
+                Registration.seat.isnot(None),
+            )
+            .all()
+        )
+        return {row[0] for row in rows}

@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import time
 from typing import Any
 from urllib.parse import urlencode
 from uuid import UUID
@@ -13,11 +12,12 @@ from sqlalchemy.orm import Session
 from database import SessionLocal, engine, get_db
 from exceptions import DomainError
 from http_client import EventsApiClient
-from models import Base, EventStatus, Registration, TicketStatus
+from models import Base
 from repositories.event_repository import EventRepository
 from repositories.registration_repository import RegistrationRepository
 from scheduler import create_scheduler
 from schemas import TicketRequest
+from services.seats_usecase import SeatsUseCase
 from services.ticket_cancellation_usecase import TicketCancellationUseCase
 from services.ticket_registration_usecase import TicketRegistrationUseCase
 from settings import EVENTS_PROVIDER_BASE_URL
@@ -212,82 +212,19 @@ def get_event_details(event_id: UUID, db: Session = Depends(get_db)):
 # --- Свободные места (с кэшем) ---
 @app.get("/api/events/{event_id}/seats")
 async def get_available_seats(event_id: UUID, db: Session = Depends(get_db)):
-    now = time.time()
-    cache_key = str(event_id)
+    usecase = SeatsUseCase(
+        event_repo=EventRepository(db),
+        ticket_repo=RegistrationRepository(db),
+        client=client,
+    )
+    try:
+        return await usecase.do(event_id)
+    except DomainError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.args[0])
+    except Exception:
+        logger.exception("💥 Неожиданная ошибка при получении мест")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
 
-    if cache_key in _seats_cache:
-        ts, cached_data = _seats_cache[cache_key]
-        if now - ts < CACHE_TTL:
-            logger.info("💾 Возвращаем данные из кэша для события %s", cache_key)
-            return cached_data
-
-    repo = EventRepository(db)
-    event = repo.get_by_id(event_id)
-
-    if not event:
-        raise HTTPException(status_code=404, detail="Событие не найдено в агрегаторе")
-
-    if event.status != EventStatus.PUBLISHED.value:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "Регистрация возможна только для опубликованных событий. "
-                f"Статус: {event.status}"
-            )
-        )
-
-    if client is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Клиент провайдера не инициализирован: проверьте EVENTS_PROVIDER_* переменные"
-        )
-
-    logger.info("🌐 Запрос свободных мест у Events Provider для %s", cache_key)
-    seats_data, error = await client.get_seats(event_id)
-
-    if error is not None:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Провайдер мест недоступен: {error}"
-        )
-
-    # Нормализуем ответ провайдера в список мест
-    raw = seats_data
-    if isinstance(raw, dict):
-        raw = raw.get("available_seats", raw.get("seats", []))
-
-    seats: list[Any] = []
-    if isinstance(raw, list):
-        for s in raw:
-            if isinstance(s, str):
-                seats.append(s)
-            elif isinstance(s, dict):
-                seat_value = (
-                    s.get("seat")
-                    or s.get("number")
-                    or s.get("id")
-                )
-                if seat_value is not None:
-                    seats.append(seat_value)
-
-    # Убираем уже занятые места (активные регистрации)
-    taken = {
-        r.seat
-        for r in db.query(Registration)
-        .filter(Registration.event_id == event_id)
-        .filter(Registration.status == TicketStatus.ACTIVE.value)
-        .all()
-        if r.seat is not None
-    }
-    available = [s for s in seats if s not in taken]
-
-    response = {
-        "event_id": str(event_id),
-        "available_seats": available,
-    }
-
-    _seats_cache[cache_key] = (now, response)
-    return response
 
 
 # --- Регистрация (через UseCase) ---
