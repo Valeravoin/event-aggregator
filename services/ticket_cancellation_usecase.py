@@ -1,5 +1,6 @@
 import logging
 
+from exceptions import DomainError, ProviderError, TicketNotFoundError
 from http_client import EventsApiClient
 from models import TicketStatus
 from repositories.event_repository import EventRepository
@@ -23,13 +24,16 @@ class TicketCancellationUseCase:
         reg = self.ticket_repo.get_by_ticket_id(ticket_id)
         if not reg:
             # Несуществующий билет — это 404 Not Found, а не 400
-            raise RuntimeError("404:Билет не найден")
+            raise TicketNotFoundError()
+
         if reg.status == TicketStatus.CANCELLED.value:
             return {"success": True, "message": "Билет уже отменён", "ticket_id": ticket_id}
 
         event = self.event_repo.get_by_id(str(reg.event_id))
         if not event:
-            raise RuntimeError("Внутренняя несогласованность: событие не найдено для билета")
+            # Это баг в данных, а не ошибка клиента — 500 с честным логом
+            logger.exception("Внутренняя несогласованность: событие %s не найдено для билета %s", reg.event_id, ticket_id)
+            raise DomainError("Внутренняя ошибка", status_code=500)
 
         # Провайдер знает только свой ID билета — внешний, полученный при регистрации
         provider_ticket_id = reg.external_ticket_id or ticket_id
@@ -38,7 +42,7 @@ class TicketCancellationUseCase:
         )
         if error:
             logger.error("💥 Провайдер ответил ошибкой на отмену: %s", error)
-            raise RuntimeError(f"502:{error}")
+            raise ProviderError(str(error))
 
         self.ticket_repo.update_status(reg, TicketStatus.CANCELLED.value)
         return {
