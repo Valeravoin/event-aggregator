@@ -43,3 +43,11 @@ logs/
 *.log
 tmp/
 temp/
+
+# Секреты
+.env
+.env.*
+*.bak
+!.env.example
+venv-test/
+venv/
