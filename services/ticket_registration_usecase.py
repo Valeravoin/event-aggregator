@@ -1,3 +1,4 @@
+from exceptions import DomainError, EventNotFoundError, NoAvailableSeatsError, ProviderError
 from models import EventStatus
 
 
@@ -10,13 +11,16 @@ class TicketRegistrationUseCase:
     async def do(self, first_name, last_name, email, event_id, seat):
         event = self.event_repo.get_by_id(event_id)
         if not event:
-            raise ValueError("Событие не найдено")
+            raise EventNotFoundError()
+
         if event.status != EventStatus.PUBLISHED.value:
-            raise ValueError(f"Регистрация невозможна: статус события {event.status}")
+            raise DomainError(
+                f"Registration unavailable: event status is {event.status}", status_code=400,
+            )
 
         existing = self.ticket_repo.find_by_seat_and_event(event_id, seat)
         if existing:
-            raise ValueError("Место уже занято в агрегаторе")
+            raise NoAvailableSeatsError("Seat is already taken")
 
         try:
             result, error = await self.client.register_ticket(
@@ -27,10 +31,10 @@ class TicketRegistrationUseCase:
                 last_name=last_name,
             )
         except Exception as e:
-            raise RuntimeError(f"502:Provider error: {e}")
+            raise ProviderError(f"Provider error: {e}")
 
         if error:
-            raise RuntimeError(f"502:{error}")
+            raise ProviderError(str(error))
 
         ticket = self.ticket_repo.create(
             first_name=first_name,

@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from database import SessionLocal, engine, get_db
+from exceptions import DomainError
 from http_client import EventsApiClient
 from models import Base, EventStatus, Registration, TicketStatus
 from repositories.event_repository import EventRepository
@@ -316,13 +317,13 @@ async def register_ticket(ticket: TicketRequest, db: Session = Depends(get_db)):
             seat=ticket.seat,
         )
         return result
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except RuntimeError as e:
-        msg = str(e)
-        status_code = int(msg.split(":")[0]) if ":" in msg else 500
-        detail = msg.split(":", 1)[1] if ":" in msg else msg
-        raise HTTPException(status_code=status_code, detail=detail)
+    except DomainError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.args[0])
+    except Exception:
+        logger.exception("💥 Неожиданная ошибка при регистрации")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+
 
 
 

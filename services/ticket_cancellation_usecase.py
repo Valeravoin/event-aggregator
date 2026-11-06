@@ -27,13 +27,17 @@ class TicketCancellationUseCase:
             raise TicketNotFoundError()
 
         if reg.status == TicketStatus.CANCELLED.value:
-            return {"success": True, "message": "Билет уже отменён", "ticket_id": ticket_id}
+            return {"success": True, "message": "Ticket is already cancelled", "ticket_id": ticket_id}
 
         event = self.event_repo.get_by_id(str(reg.event_id))
         if not event:
             # Это баг в данных, а не ошибка клиента — 500 с честным логом
-            logger.exception("Внутренняя несогласованность: событие %s не найдено для билета %s", reg.event_id, ticket_id)
-            raise DomainError("Внутренняя ошибка", status_code=500)
+            logger.exception(
+                "Внутренняя несогласованность: событие %s не найдено для билета %s",
+                reg.event_id,
+                ticket_id,
+            )
+            raise DomainError("Internal error", status_code=500)
 
         # Провайдер знает только свой ID билета — внешний, полученный при регистрации
         provider_ticket_id = reg.external_ticket_id or ticket_id
@@ -48,5 +52,5 @@ class TicketCancellationUseCase:
         return {
             "success": True,
             "ticket_id": ticket_id,
-            "message": "Отмена успешна",
+            "message": "Cancellation successful",
         }
