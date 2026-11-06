@@ -1,9 +1,13 @@
 import os
 
-# 1) КРИТИЧНО: ставим DATABASE_URL ДО импортов приложения.
-#    database.py читает её при импорте, поэтому весь движок уйдёт на SQLite.
+# 1) КРИТИЧНО: ставим переменные окружения ДО импортов приложения.
+#    - DATABASE_URL нужен до импорта database.py — весь движок уйдёт на SQLite.
+#    - EVENTS_PROVIDER_* нужен до создания EventsApiClient — иначе клиент
+#      не инициализируется и API отдаёт 503 вместо того, чтобы дойти до мока.
 TEST_DB_PATH = "test_event_aggregator.db"
 os.environ["DATABASE_URL"] = f"sqlite:///./{TEST_DB_PATH}"
+os.environ.setdefault("EVENTS_PROVIDER_API_KEY", "test-key")
+os.environ.setdefault("EVENTS_PROVIDER_BASE_URL", "https://provider.example.com")
 
 # Удаляем старый файл тестовой базы, чтобы не мешали данные от прошлых запусков
 if os.path.exists(TEST_DB_PATH):

@@ -348,7 +348,7 @@ async def cancel_ticket(ticket_id: str, db: Session = Depends(get_db)):
         result = await usecase.do(ticket_id=ticket_id)
         return result
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
         msg = str(e)
         if ":" in msg:
@@ -356,7 +356,6 @@ async def cancel_ticket(ticket_id: str, db: Session = Depends(get_db)):
             detail = msg.split(":", 1)[1]
             raise HTTPException(status_code=status_code, detail=detail)
         raise HTTPException(status_code=500, detail=msg)
-    except Exception as e:
-        # Временный «рентген»: покажет реальную причину, если 500 останется
-        logger.exception("💥 Отмена тикета упала")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("💥 Неожиданная ошибка при отмене тикета")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
