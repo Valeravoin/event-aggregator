@@ -11,6 +11,7 @@ from models import Event, SyncMetadata, SyncStatus
 logger = logging.getLogger(__name__)
 
 STALE_RUNNING_TIMEOUT = timedelta(minutes=10)
+FULL_SYNC_FROM = "2000-01-01T00:00:00+00:00"
 
 
 def _parse_dt(value) -> datetime | None:
@@ -35,6 +36,20 @@ def _parse_uuid(value) -> UUID | None:
     except (ValueError, TypeError):
         logger.warning(f"⚠️ Не удалось разобрать UUID: {value!r}")
         return None
+
+
+def _get_changed_at(sync_record: SyncMetadata) -> str:
+    """Дата для фильтра changed_at: инкремент от прошлого синка или полный обход."""
+    last = sync_record.last_event_time
+    if last:
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=UTC)
+        # Секунда перекрытия — чтобы не потерять события с тем же changed_at
+        changed = last - timedelta(seconds=1)
+        logger.info(f"🔁 Инкрементальный синк: забираю события с {changed.isoformat()}")
+        return changed.isoformat()
+    logger.info("🔁 Первый запуск — полный синк с 2000-01-01")
+    return FULL_SYNC_FROM
 
 
 def get_or_create_sync_record(db: Session, source_name: str) -> SyncMetadata:
@@ -80,10 +95,10 @@ async def run_sync(db: Session, source_name: str = "scheduled-source") -> bool:
 
         client = EventsApiClient()
 
-        # На время зачёта — всегда полный синк: это надёжнее,
-        # исключает проблемы с инкрементальным changed_at.
-        # (Вернуть инкремент можно после, заменив на значение из sync_record.last_event_time.)
-        events_data = await client.fetch_all_events(changed_at="2000-01-01")
+        # Инкрементальный синк: забираем только события, изменённые
+        # после последнего успешного прогона. last_event_time обновляется
+        # только после успешного commit — при падении ничего не теряем.
+        events_data = await client.fetch_all_events(changed_at=_get_changed_at(sync_record))
         if not isinstance(events_data, list):
             logger.error("❌ API вернул некорректный формат данных (не список).")
             events_data = []

@@ -1,5 +1,5 @@
 # repositories/event_repository.py
-from datetime import UTC
+from datetime import UTC, datetime
 
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
@@ -23,18 +23,17 @@ class EventRepository:
 
         offset = (page - 1) * page_size
 
-        # Сначала считаем общее количество
-        count_stmt = select(func.count()).select_from(Event)
         dt = None
         if date_from_str:
-            from datetime import datetime
             try:
-                dt = datetime.strptime(date_from_str, "%Y-%m-%d")
-                dt = dt.replace(tzinfo=UTC)
-                count_stmt = count_stmt.where(Event.event_time >= dt)
+                dt = datetime.strptime(date_from_str, "%Y-%m-%d").replace(tzinfo=UTC)
             except ValueError:
                 raise ValueError("Неверный формат date_from. Используйте YYYY-MM-DD")
 
+        # Сначала считаем общее количество
+        count_stmt = select(func.count()).select_from(Event)
+        if dt:
+            count_stmt = count_stmt.where(Event.event_time >= dt)
         total = self.session.execute(count_stmt).scalar() or 0
 
         # Теперь выбираем сами события — published и актуальные первыми

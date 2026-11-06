@@ -128,6 +128,7 @@ def get_events(
     page: int = 1,
     page_size: int = 10,
     per_page: int | None = None,
+    date_from: str | None = None,
     db: Session = Depends(get_db),
 ):
     # Тестовый контракт использует page_size, старый клиент — per_page
@@ -138,13 +139,15 @@ def get_events(
         size = 10
 
     repo = EventRepository(db)
-    total = repo.count_events()
-    events = repo.get_events_page(offset=(page - 1) * size, limit=size)
+    try:
+        events, total = repo.list_events(page, size, date_from)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     def _page_url(p: int):
         if p < 1 or (p - 1) * size >= total:
             return None
-        return f"/api/events?{urlencode({'page': p, 'page_size': size})}"
+        return f"/api/events?{urlencode({'page': p, 'page_size': size, **({'date_from': date_from} if date_from else {})})}"
 
     return {
         "count": total,
@@ -174,6 +177,7 @@ def get_events(
             for ev in events
         ],
     }
+
 
 
 # --- Детали события ---
