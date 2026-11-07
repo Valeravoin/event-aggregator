@@ -1,4 +1,3 @@
-# repositories/registration_repository.py
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -27,13 +26,13 @@ class RegistrationRepository:
         status: str = TicketStatus.ACTIVE.value,
     ) -> Registration:
         reg = Registration(
-            ticket_id=uuid4(),                     # генерируем внутренний ID здесь
+            ticket_id=uuid4(),
             event_id=event_id,
             email=email,
             first_name=first_name,
             last_name=last_name,
             seat=seat,
-            external_ticket_id=external_ticket_id, # <-- ДОБАВЛЕНО
+            external_ticket_id=external_ticket_id,
             status=status,
         )
         self.db.add(reg)

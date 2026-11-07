@@ -1,6 +1,5 @@
 import asyncio
 import logging
-from typing import Any
 from urllib.parse import urlencode
 from uuid import UUID
 
@@ -42,9 +41,6 @@ try:
 except Exception:
     logger.exception("💥 Не удалось создать EventsApiClient — проверь env на платформе")
 
-# --- Кэш мест ---
-_seats_cache: dict[str, tuple[float, dict[str, Any]]] = {}
-CACHE_TTL = 30
 
 scheduler = create_scheduler()
 

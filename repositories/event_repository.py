@@ -36,12 +36,13 @@ class EventRepository:
             count_stmt = count_stmt.where(Event.event_time >= dt)
         total = self.session.execute(count_stmt).scalar() or 0
 
-        # Теперь выбираем сами события — published и актуальные первыми
+
         status_priority = case(
             (Event.status == EventStatus.PUBLISHED.value, 0),
-            (Event.status == "registration_closed", 1),
-            else_=2,  # finished — в конец списка
+            (Event.status == EventStatus.REGISTRATION_CLOSED.value, 1),
+            else_=2,
         )
+
         stmt = select(Event).order_by(
             status_priority,
             Event.event_time.asc().nulls_last(),
@@ -61,9 +62,10 @@ class EventRepository:
         """Возвращает страницу событий: published первыми, затем по времени."""
         status_priority = case(
             (Event.status == EventStatus.PUBLISHED.value, 0),
-            (Event.status == "registration_closed", 1),
-            else_=2,  # finished — в конец списка
+            (Event.status == EventStatus.REGISTRATION_CLOSED.value, 1),
+            else_=2,
         )
+
         stmt = (
             select(Event)
             .order_by(

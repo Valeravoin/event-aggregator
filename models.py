@@ -1,4 +1,4 @@
-import enum
+from enum import Enum
 
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.dialects.postgresql import UUID
@@ -7,21 +7,22 @@ from sqlalchemy.orm import declarative_base, relationship
 Base = declarative_base()
 
 
-class EventStatus(str, enum.Enum):
-    """Статусы события. Унаследован от str — удобно сериализуется в JSON и сравнивается со строками."""
-
+class EventStatus(str, Enum):
     PUBLISHED = "published"
+    REGISTRATION_CLOSED = "registration_closed"
+    FINISHED = "finished"
     CANCELLED = "cancelled"
 
 
-class TicketStatus(str, enum.Enum):
+
+class TicketStatus(str, Enum):
     """Статусы регистрации (билета)."""
 
     ACTIVE = "active"
     CANCELLED = "cancelled"
 
 
-class SyncStatus(str, enum.Enum):
+class SyncStatus(str, Enum):
     """Статусы синхронизации с провайдером."""
 
     IDLE = "idle"

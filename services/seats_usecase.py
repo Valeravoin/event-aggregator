@@ -11,7 +11,7 @@ from repositories.registration_repository import RegistrationRepository
 
 logger = logging.getLogger(__name__)
 
-CACHE_TTL = 60  # секунд
+CACHE_TTL = 30  # было 60 — по требованию ТЗ
 
 # Кэш на уровне модуля — живёт между запросами, как раньше
 seats_cache: dict[str, tuple[float, dict]] = {}
