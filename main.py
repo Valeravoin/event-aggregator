@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import os
 from contextlib import asynccontextmanager
 from urllib.parse import urlencode
 from uuid import UUID
@@ -21,7 +20,7 @@ from schemas import TicketRequest
 from services.seats_usecase import SeatsUseCase
 from services.ticket_cancellation_usecase import TicketCancellationUseCase
 from services.ticket_registration_usecase import TicketRegistrationUseCase
-from settings import EVENTS_PROVIDER_BASE_URL
+from settings import DISABLE_STARTUP_SYNC, EVENTS_PROVIDER_BASE_URL
 from sync_runner import run_sync
 
 logging.basicConfig(
@@ -75,10 +74,11 @@ async def lifespan(app: FastAPI):
             except Exception:
                 logger.exception("💥 Ошибка при стартовой синхронизации")
 
-    if os.getenv("DISABLE_STARTUP_SYNC"):
+    if DISABLE_STARTUP_SYNC:
         logger.info("⏭️ Стартовая синхронизация отключена (DISABLE_STARTUP_SYNC)")
     else:
         asyncio.create_task(_startup_sync())
+
 
 
     # 3. Планировщик — ровно один раз
