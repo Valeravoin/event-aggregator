@@ -3,6 +3,8 @@ import time
 from typing import Any
 from uuid import UUID
 
+from fastapi.concurrency import run_in_threadpool
+
 from exceptions import DomainError, EventNotFoundError, ProviderError
 from http_client import EventsApiClient
 from models import EventStatus
@@ -39,7 +41,7 @@ class SeatsUseCase:
                 logger.info("💾 Возвращаем данные из кэша для события %s", cache_key)
                 return data
 
-        event = self.event_repo.get_by_id(event_id)
+        event = await run_in_threadpool(self.event_repo.get_by_id, event_id)
         if not event:
             raise EventNotFoundError()
         if event.status != EventStatus.PUBLISHED.value:
@@ -58,12 +60,13 @@ class SeatsUseCase:
         if error is not None:
             raise ProviderError(f"Seats provider is unavailable: {error}")
 
-        taken = self.ticket_repo.get_taken_seats(event_id)
+        taken = await run_in_threadpool(self.ticket_repo.get_taken_seats, event_id)
         available = [s for s in self._normalize(seats_data) if s not in taken]
 
         response = {"event_id": cache_key, "available_seats": available}
         seats_cache[cache_key] = (now, response)
         return response
+
 
     @staticmethod
     def _normalize(raw: Any) -> list[str]:

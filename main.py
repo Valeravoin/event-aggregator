@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 from urllib.parse import urlencode
 from uuid import UUID
 
@@ -41,10 +42,62 @@ try:
 except Exception:
     logger.exception("💥 Не удалось создать EventsApiClient — проверь env на платформе")
 
-
 scheduler = create_scheduler()
 
-app = FastAPI(title="EventAggregator LMS")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("🚀 Приложение EventAggregator запущено.")
+
+    # 1. Создаём таблицы, если их нет (страховка для платформы без миграций)
+    if engine is None:
+        logger.warning("База не настроена — таблицы не создаются")
+    else:
+        try:
+            Base.metadata.create_all(bind=engine)
+            logger.info("Таблицы проверены/созданы")
+        except Exception as e:
+            logger.error("Не удалось создать таблицы: %s", e)
+
+    # 2. Стартовая синхронизация в фоне — сервер не ждёт
+    async def _startup_sync():
+        if SessionLocal is None:
+            logger.warning("DATABASE_URL не задан — стартовая синхронизация пропущена")
+            return
+        with SessionLocal() as db:
+            try:
+                if await run_sync(db, source_name="startup-source"):
+                    logger.info("✅ Стартовая синхронизация завершена.")
+                else:
+                    logger.warning("⚠️ Стартовая синхронизация частично не удалась.")
+            except Exception:
+                logger.exception("💥 Ошибка при стартовой синхронизации")
+
+    asyncio.create_task(_startup_sync())
+
+    # 3. Планировщик — ровно один раз
+    try:
+        scheduler.start()
+        logger.info("🕒 Планировщик запущен: интервал 24 часа.")
+    except Exception as e:
+        logger.error("Не удалось запустить планировщик: %s", e)
+
+    yield
+
+    # --- Shutdown ---
+    try:
+        scheduler.shutdown(wait=False)
+    except Exception:
+        logger.exception("Ошибка при остановке планировщика")
+    if client is not None:
+        try:
+            await client.close()
+            logger.info("✅ HTTP-клиент провайдера закрыт")
+        except Exception:
+            logger.exception("Ошибка при закрытии HTTP-клиента")
+
+
+app = FastAPI(title="EventAggregator LMS", lifespan=lifespan)
 
 
 @app.exception_handler(RequestValidationError)
