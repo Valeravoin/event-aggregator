@@ -9,6 +9,78 @@ from settings import EVENTS_PROVIDER_API_KEY, EVENTS_PROVIDER_BASE_URL
 logger = logging.getLogger(__name__)
 
 
+class EventsPaginator:
+    """Итератор по страницам провайдера (паттерн Iterator).
+
+    Реальная загрузка асинхронная — используйте ``async for page in paginator:``.
+    Синхронный протокол (__iter__/__next__) отдаёт страницы, уже попавшие
+    в буфер, — удобно для постобработки и юнит-тестов.
+    """
+
+    def __init__(
+        self,
+        client: "EventsApiClient",
+        endpoint: str,
+        params: dict[str, Any] | None = None,
+    ):
+        self._client = client
+        self._first_endpoint = endpoint
+        self._params = params or {}
+        self._next_endpoint: str | None = endpoint
+        self._buffer: list[list[dict[str, Any]]] = []
+        self._position = 0
+
+    # --- синхронный протокол: поверх уже загруженных страниц ---
+    def __iter__(self) -> "EventsPaginator":
+        self._position = 0
+        return self
+
+    def __next__(self) -> list[dict[str, Any]]:
+        if self._position < len(self._buffer):
+            page = self._buffer[self._position]
+            self._position += 1
+            return page
+        raise StopIteration
+
+    # --- асинхронный протокол: реальная загрузка с провайдера ---
+    def __aiter__(self) -> "EventsPaginator":
+        return self
+
+    async def __anext__(self) -> list[dict[str, Any]]:
+        if self._position >= len(self._buffer):
+            if self._next_endpoint is None:
+                raise StopAsyncIteration
+            page = await self._fetch_page()
+            self._buffer.append(page)
+        page = self._buffer[self._position]
+        self._position += 1
+        return page
+
+    async def _fetch_page(self) -> list[dict[str, Any]]:
+        data, error = await self._client._make_request(
+            "GET", self._next_endpoint, params=self._params or None
+        )
+        # Параметры (например, changed_at) нужны только на первом запросе:
+        # дальше query уже зашит в next-URL от провайдера.
+        self._params = {}
+
+        if error:
+            raise RuntimeError(error)
+
+        if isinstance(data, dict):
+            results = data.get("results") or []
+            next_url = data.get("next")
+        else:
+            logger.warning("📄 Провайдер вернул несловарный ответ: %r", data)
+            results, next_url = [], None
+
+        # next приходит полным URL — отрезаем base_url, оставляем path+query
+        if next_url and next_url.startswith(self._client.base_url):
+            next_url = next_url[len(self._client.base_url):]
+        self._next_endpoint = next_url
+        return results
+
+
 class EventsApiClient:
     def __init__(self, base_url: str | None = None):
         self.api_key = EVENTS_PROVIDER_API_KEY
@@ -19,7 +91,7 @@ class EventsApiClient:
                 "Проверьте .env локально и переменные окружения на LMS."
             )
 
-        # base_url: приоритет — аргумент (тесты), потом settings (дефолт — внутренний хостнейм кластера)
+        # base_url: приоритет — аргумент (тесты), потом settings
         url = base_url if base_url is not None else EVENTS_PROVIDER_BASE_URL
         self.base_url = url.rstrip("/")
 
@@ -35,14 +107,17 @@ class EventsApiClient:
             follow_redirects=True,
             timeout=30.0,
         )
-        logger.info(f"📡 EventsApiClient инициализирован. URL: {self.base_url}")
+        logger.info("📡 EventsApiClient инициализирован. URL: %s", self.base_url)
 
-    async def _make_request(self, method: str, endpoint: str, **kwargs) -> tuple[dict | None, str | None]:
+    async def _make_request(
+        self, method: str, endpoint: str, **kwargs
+    ) -> tuple[dict | None, str | None]:
         try:
             response = await self.client.request(method, endpoint, **kwargs)
             if response.status_code >= 400:
                 logger.warning(
-                    f"⚠️ HTTP {response.status_code} на {endpoint}. Тело: {response.text[:200]}"
+                    "⚠️ HTTP %d на %s. Тело: %s",
+                    response.status_code, endpoint, response.text[:200],
                 )
                 return None, f"HTTP {response.status_code}: {response.reason_phrase}"
             return response.json(), None
@@ -53,40 +128,20 @@ class EventsApiClient:
             logger.exception("💥 Неожиданная ошибка")
             return None, f"Unexpected error: {e!s}"
 
-    # --- Синхронизация: все события через курсорную пагинацию ---
+    # --- Синхронизация: все события через итератор страниц ---
     async def fetch_all_events(self, changed_at: str = "2000-01-01") -> list[dict[str, Any]]:
-        """
-        Обходит ВСЕ страницы провайдера, переходя по ссылкам в поле next,
-        пока next не станет null. Возвращает единый список событий.
-        """
+        """Собирает события со всех страниц провайдера в единый список."""
         all_events: list[dict[str, Any]] = []
-        # Trailing slash обязателен: /api/events/ с параметром changed_at
-        endpoint = f"/api/events/?changed_at={changed_at}"
+        paginator = EventsPaginator(self, "/api/events/", params={"changed_at": changed_at})
 
-        page = 1
-        while endpoint:
-            data, error = await self._make_request("GET", endpoint)
-            if error:
-                raise RuntimeError(error)
-
-            results = data.get("results", []) if isinstance(data, dict) else []
-            all_events.extend(results)
+        async for page in paginator:
+            all_events.extend(page)
             logger.info(
-                f"📄 Страница {page}: получено {len(results)} событий "
-                f"(всего накоплено {len(all_events)})"
+                "📄 Получено событий на странице: %d (всего накоплено %d)",
+                len(page), len(all_events),
             )
 
-            next_url = data.get("next") if isinstance(data, dict) else None
-            if not next_url:
-                break
-
-            # next приходит полным URL — отрезаем base_url и работаем с path+query
-            if next_url.startswith(self.base_url):
-                next_url = next_url[len(self.base_url):]
-            endpoint = next_url
-            page += 1
-
-        logger.info(f"✅ Всего получено {len(all_events)} событий с провайдера")
+        logger.info("✅ Всего получено %d событий с провайдера", len(all_events))
         return all_events
 
     # --- Свободные места ---
