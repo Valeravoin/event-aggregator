@@ -1,5 +1,7 @@
 import os
 
+os.environ.setdefault("DISABLE_STARTUP_SYNC", "1")
+
 # 1) КРИТИЧНО: ставим переменные окружения ДО импортов приложения.
 #    - DATABASE_URL нужен до импорта database.py — весь движок уйдёт на SQLite.
 #    - EVENTS_PROVIDER_* нужен до создания EventsApiClient — иначе клиент

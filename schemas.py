@@ -4,13 +4,13 @@ from pydantic import BaseModel
 
 
 class TicketCreate(BaseModel):
-    event_id: str  # UUID события как строка
+    event_id: str
     user_email: str
-    seat_number: str | None = None  # если есть нумерация мест
+    seat_number: str | None = None
 
 class TicketRequest(BaseModel):
     first_name: str
     last_name: str
     email: str
     seat: str
-    event_id: UUID  # <-- теперь это UUID, а не str
+    event_id: UUID
