@@ -76,7 +76,7 @@ class EventsPaginator:
 
         # next приходит полным URL — отрезаем base_url, оставляем path+query
         if next_url and next_url.startswith(self._client.base_url):
-            next_url = next_url[len(self._client.base_url):]
+            next_url = next_url[len(self._client.base_url) :]
         self._next_endpoint = next_url
         return results
 
@@ -117,7 +117,9 @@ class EventsApiClient:
             if response.status_code >= 400:
                 logger.warning(
                     "⚠️ HTTP %d на %s. Тело: %s",
-                    response.status_code, endpoint, response.text[:200],
+                    response.status_code,
+                    endpoint,
+                    response.text[:200],
                 )
                 return None, f"HTTP {response.status_code}: {response.reason_phrase}"
             return response.json(), None
@@ -138,7 +140,8 @@ class EventsApiClient:
             all_events.extend(page)
             logger.info(
                 "📄 Получено событий на странице: %d (всего накоплено %d)",
-                len(page), len(all_events),
+                len(page),
+                len(all_events),
             )
 
         logger.info("✅ Всего получено %d событий с провайдера", len(all_events))

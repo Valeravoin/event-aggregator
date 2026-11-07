@@ -14,7 +14,6 @@ class EventStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
-
 class TicketStatus(str, Enum):
     """Статусы регистрации (билета)."""
 

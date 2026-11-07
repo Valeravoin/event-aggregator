@@ -3,8 +3,6 @@ import time
 from typing import Any
 from uuid import UUID
 
-from fastapi.concurrency import run_in_threadpool
-
 from exceptions import DomainError, EventNotFoundError, ProviderError
 from http_client import EventsApiClient
 from models import EventStatus
@@ -13,10 +11,26 @@ from repositories.registration_repository import RegistrationRepository
 
 logger = logging.getLogger(__name__)
 
-CACHE_TTL = 30  # было 60 — по требованию ТЗ
+CACHE_TTL = 30
 
-# Кэш на уровне модуля — живёт между запросами, как раньше
+# Кэш на уровне модуля — живёт между запросами
 seats_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _normalize(raw: Any) -> list[str]:
+    """Нормализуем ответ провайдера в список мест."""
+    if isinstance(raw, dict):
+        raw = raw.get("available_seats", raw.get("seats", []))
+    seats: list[str] = []
+    if isinstance(raw, list):
+        for s in raw:
+            if isinstance(s, str):
+                seats.append(s)
+            elif isinstance(s, dict):
+                seat_value = s.get("seat") or s.get("number") or s.get("id")
+                if seat_value is not None:
+                    seats.append(str(seat_value))
+    return seats
 
 
 class SeatsUseCase:
@@ -41,7 +55,7 @@ class SeatsUseCase:
                 logger.info("💾 Возвращаем данные из кэша для события %s", cache_key)
                 return data
 
-        event = await run_in_threadpool(self.event_repo.get_by_id, event_id)
+        event = await self.event_repo.get_by_id(event_id)
         if not event:
             raise EventNotFoundError()
         if event.status != EventStatus.PUBLISHED.value:
@@ -60,26 +74,9 @@ class SeatsUseCase:
         if error is not None:
             raise ProviderError(f"Seats provider is unavailable: {error}")
 
-        taken = await run_in_threadpool(self.ticket_repo.get_taken_seats, event_id)
-        available = [s for s in self._normalize(seats_data) if s not in taken]
+        taken = await self.ticket_repo.get_taken_seats(event_id)
+        available = [s for s in _normalize(seats_data) if s not in taken]
 
         response = {"event_id": cache_key, "available_seats": available}
         seats_cache[cache_key] = (now, response)
         return response
-
-
-    @staticmethod
-    def _normalize(raw: Any) -> list[str]:
-        """Нормализуем ответ провайдера в список мест."""
-        if isinstance(raw, dict):
-            raw = raw.get("available_seats", raw.get("seats", []))
-        seats: list[str] = []
-        if isinstance(raw, list):
-            for s in raw:
-                if isinstance(s, str):
-                    seats.append(s)
-                elif isinstance(s, dict):
-                    seat_value = s.get("seat") or s.get("number") or s.get("id")
-                    if seat_value is not None:
-                        seats.append(str(seat_value))
-        return seats

@@ -1,6 +1,7 @@
 # exceptions.py
 class DomainError(Exception):
     """Базовое доменное исключение с HTTP-статусом."""
+
     def __init__(self, message: str, status_code: int = 400):
         super().__init__(message)
         self.status_code = status_code
@@ -10,11 +11,10 @@ class EventNotPublishedError(DomainError):
     def __init__(self):
         super().__init__("Event is not published", status_code=400)
 
+
 class EventNotFoundError(DomainError):
     def __init__(self):
         super().__init__("Event not found", status_code=404)
-
-
 
 
 class TicketAlreadyCancelledError(DomainError):

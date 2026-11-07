@@ -1,13 +1,14 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from datetime import date
 from urllib.parse import urlencode
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import SessionLocal, engine, get_db
 from exceptions import DomainError
@@ -23,10 +24,7 @@ from services.ticket_registration_usecase import TicketRegistrationUseCase
 from settings import DISABLE_STARTUP_SYNC, EVENTS_PROVIDER_BASE_URL
 from sync_runner import run_sync
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 # --- ГЛОБАЛЬНЫЙ КЛИЕНТ ---
@@ -54,18 +52,19 @@ async def lifespan(app: FastAPI):
         logger.warning("База не настроена — таблицы не создаются")
     else:
         try:
-            Base.metadata.create_all(bind=engine)
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
             logger.info("Таблицы проверены/созданы")
         except Exception as e:
             logger.error("Не удалось создать таблицы: %s", e)
 
-    # 2. Стартовая синхронизация в фоне — сервер не ждёт
         # 2. Стартовая синхронизация в фоне — сервер не ждёт
+
     async def _startup_sync():
         if SessionLocal is None:
             logger.warning("DATABASE_URL не задан — стартовая синхронизация пропущена")
             return
-        with SessionLocal() as db:
+        async with SessionLocal() as db:
             try:
                 if await run_sync(db, source_name="startup-source"):
                     logger.info("✅ Стартовая синхронизация завершена.")
@@ -78,8 +77,6 @@ async def lifespan(app: FastAPI):
         logger.info("⏭️ Стартовая синхронизация отключена (DISABLE_STARTUP_SYNC)")
     else:
         asyncio.create_task(_startup_sync())
-
-
 
     # 3. Планировщик — ровно один раз
     try:
@@ -102,6 +99,9 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.exception("Ошибка при закрытии HTTP-клиента")
 
+    if engine is not None:
+        await engine.dispose()
+
 
 app = FastAPI(title="EventAggregator LMS", lifespan=lifespan)
 
@@ -110,25 +110,19 @@ app = FastAPI(title="EventAggregator LMS", lifespan=lifespan)
 async def validation_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(
         status_code=400,
-        content={
-            "detail": [
-                {"loc": e.get("loc"), "msg": e.get("msg")}
-                for e in exc.errors()
-            ]
-        },
+        content={"detail": [{"loc": e.get("loc"), "msg": e.get("msg")} for e in exc.errors()]},
     )
-# get_db берём из database.py — там есть защита от не настроенной базы
 
 
 # --- Health Check ---
 @app.get("/api/health")
-def health():
+async def health():
     return {"status": "ok"}
 
 
 # --- Ручной запуск синхронизации ---
 @app.post("/api/sync/trigger")
-async def trigger_sync(db: Session = Depends(get_db)):
+async def trigger_sync(db: AsyncSession = Depends(get_db)):
     try:
         success = await run_sync(db)
     except Exception:
@@ -141,12 +135,12 @@ async def trigger_sync(db: Session = Depends(get_db)):
 
 # --- Список событий с пагинацией (контракт: count/next/previous/results) ---
 @app.get("/api/events")
-def get_events(
+async def get_events(
     page: int = 1,
     page_size: int = 10,
     per_page: int | None = None,
-    date_from: str | None = None,
-    db: Session = Depends(get_db),
+    date_from: date | None = None,
+    db: AsyncSession = Depends(get_db),
 ):
     # Тестовый контракт использует page_size, старый клиент — per_page
     size = per_page if per_page is not None else page_size
@@ -154,17 +148,15 @@ def get_events(
         page = 1
     if size < 1:
         size = 10
+    size = min(size, 100)  # тот же лимит, что и в репозитории — ссылки не врут
 
     repo = EventRepository(db)
-    try:
-        events, total = repo.list_events(page, size, date_from)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    events, total = await repo.list_events(page, size, date_from)
 
     def _page_url(p: int):
         if p < 1 or (p - 1) * size >= total:
             return None
-        return f"/api/events?{urlencode({'page': p, 'page_size': size, **({'date_from': date_from} if date_from else {})})}"
+        return f"/api/events?{urlencode({'page': p, 'page_size': size, **({'date_from': date_from.isoformat()} if date_from else {})})}"
 
     return {
         "count": total,
@@ -181,12 +173,9 @@ def get_events(
                     "address": ev.address,
                     "seats_pattern": ev.seats_pattern,
                 },
-                "event_time": (
-                    ev.event_time.isoformat() if ev.event_time else None
-                ),
+                "event_time": (ev.event_time.isoformat() if ev.event_time else None),
                 "registration_deadline": (
-                    ev.registration_deadline.isoformat()
-                    if ev.registration_deadline else None
+                    ev.registration_deadline.isoformat() if ev.registration_deadline else None
                 ),
                 "status": ev.status,
                 "number_of_visitors": ev.number_of_visitors,
@@ -196,12 +185,11 @@ def get_events(
     }
 
 
-
 # --- Детали события ---
 @app.get("/api/events/{event_id}")
-def get_event_details(event_id: UUID, db: Session = Depends(get_db)):
+async def get_event_details(event_id: UUID, db: AsyncSession = Depends(get_db)):
     repo = EventRepository(db)
-    event = repo.get_by_id(event_id)
+    event = await repo.get_by_id(event_id)
 
     if not event:
         raise HTTPException(status_code=404, detail="Событие не найдено")
@@ -222,8 +210,7 @@ def get_event_details(event_id: UUID, db: Session = Depends(get_db)):
         "place": place,
         "event_time": event.event_time.isoformat() if event.event_time else None,
         "registration_deadline": (
-            event.registration_deadline.isoformat()
-            if event.registration_deadline else None
+            event.registration_deadline.isoformat() if event.registration_deadline else None
         ),
         "status": event.status,
         "number_of_visitors": event.number_of_visitors,
@@ -232,7 +219,7 @@ def get_event_details(event_id: UUID, db: Session = Depends(get_db)):
 
 # --- Свободные места (с кэшем) ---
 @app.get("/api/events/{event_id}/seats")
-async def get_available_seats(event_id: UUID, db: Session = Depends(get_db)):
+async def get_available_seats(event_id: UUID, db: AsyncSession = Depends(get_db)):
     usecase = SeatsUseCase(
         event_repo=EventRepository(db),
         ticket_repo=RegistrationRepository(db),
@@ -247,14 +234,13 @@ async def get_available_seats(event_id: UUID, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 
-
 # --- Регистрация (через UseCase) ---
 @app.post("/api/tickets", status_code=201)
-async def register_ticket(ticket: TicketRequest, db: Session = Depends(get_db)):
+async def register_ticket(ticket: TicketRequest, db: AsyncSession = Depends(get_db)):
     if client is None:
         raise HTTPException(
             status_code=503,
-            detail="Клиент провайдера не инициализирован: проверьте EVENTS_PROVIDER_* переменные"
+            detail="Клиент провайдера не инициализирован: проверьте EVENTS_PROVIDER_* переменные",
         )
 
     event_repo = EventRepository(db)
@@ -282,16 +268,13 @@ async def register_ticket(ticket: TicketRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 
-
-
-
 # --- Отмена регистрации (через UseCase) ---
 @app.delete("/api/tickets/{ticket_id}")
-async def cancel_ticket(ticket_id: str, db: Session = Depends(get_db)):
+async def cancel_ticket(ticket_id: str, db: AsyncSession = Depends(get_db)):
     if client is None:
         raise HTTPException(
             status_code=503,
-            detail="Provider client is not initialized: check EVENTS_PROVIDER_* env variables"
+            detail="Provider client is not initialized: check EVENTS_PROVIDER_* env variables",
         )
 
     event_repo = EventRepository(db)

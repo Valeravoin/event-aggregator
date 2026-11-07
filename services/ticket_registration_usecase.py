@@ -1,5 +1,3 @@
-from fastapi.concurrency import run_in_threadpool
-
 from exceptions import DomainError, EventNotFoundError, NoAvailableSeatsError, ProviderError
 from models import EventStatus
 
@@ -11,18 +9,17 @@ class TicketRegistrationUseCase:
         self.client = client
 
     async def do(self, first_name, last_name, email, event_id, seat):
-        event = await run_in_threadpool(self.event_repo.get_by_id, event_id)
+        event = await self.event_repo.get_by_id(event_id)
         if not event:
             raise EventNotFoundError()
 
         if event.status != EventStatus.PUBLISHED.value:
             raise DomainError(
-                f"Registration unavailable: event status is {event.status}", status_code=400,
+                f"Registration unavailable: event status is {event.status}",
+                status_code=400,
             )
 
-        existing = await run_in_threadpool(
-            self.ticket_repo.find_by_seat_and_event, event_id, seat
-        )
+        existing = await self.ticket_repo.find_by_seat_and_event(event_id, seat)
         if existing:
             raise NoAvailableSeatsError("Seat is already taken")
 
@@ -40,8 +37,7 @@ class TicketRegistrationUseCase:
         if error:
             raise ProviderError(str(error))
 
-        ticket = await run_in_threadpool(
-            self.ticket_repo.create,
+        ticket = await self.ticket_repo.create(
             first_name=first_name,
             last_name=last_name,
             email=email,

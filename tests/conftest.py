@@ -17,9 +17,10 @@ if os.path.exists(TEST_DB_PATH):
 # своим loop. NullPool гарантирует, что соединения не переиспользуются
 # между loop'ами — иначе получим «database is locked» и «attached to
 # a different loop».
-import database
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
+
+import database
 
 database.engine = create_async_engine(os.environ["DATABASE_URL"], poolclass=NullPool)
 database.SessionLocal = async_sessionmaker(bind=database.engine, expire_on_commit=False)

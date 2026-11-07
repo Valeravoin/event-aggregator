@@ -8,6 +8,7 @@ class TicketCreate(BaseModel):
     user_email: str
     seat_number: str | None = None
 
+
 class TicketRequest(BaseModel):
     first_name: str
     last_name: str

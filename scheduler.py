@@ -1,46 +1,35 @@
-# scheduler.py
-import asyncio
 import logging
 
-from apscheduler.schedulers.background import BackgroundScheduler
-from sqlalchemy.orm import Session
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from database import get_db
+from database import SessionLocal
 from sync_runner import run_sync
 
 logger = logging.getLogger(__name__)
 
 
-def _run_sync_once():
-    """
-    Вспомогательная функция: запускает асинхронный синк из синхронного контекста.
-    run_sync теперь async, поэтому внутри синхронной джобы используем asyncio.run().
-    """
-    db: Session = next(get_db())
-    try:
-        success = asyncio.run(run_sync(db, source_name="scheduled-source"))
-        if success:
-            logger.info("✅ Синхронизация завершена успешно")
-        else:
-            logger.error("❌ Синхронизация завершилась с ошибкой (частично или полностью)")
-        return success
-    except Exception:
-        logger.exception("💥 Критическая ошибка во время синхронизации")
+async def _run_sync_once() -> bool:
+    if SessionLocal is None:
+        logger.warning("DATABASE_URL не задан — плановая синхронизация пропущена")
         return False
-    finally:
-        db.close()
+    async with SessionLocal() as db:
+        success = await run_sync(db, source_name="scheduled-source")
+    if success:
+        logger.info("✅ Синхронизация завершена успешно")
+    else:
+        logger.error("❌ Синхронизация завершилась с ошибкой (частично или полностью)")
+    return success
 
 
 def create_scheduler():
-    scheduler = BackgroundScheduler()
+    scheduler = AsyncIOScheduler()
 
-    def sync_job():
-        """Задача планировщика: всегда создаёт новую сессию и изолированную транзакцию."""
+    async def sync_job():
         logger.info("⏰ Запуск запланированной синхронизации (по расписанию)...")
-        _run_sync_once()
-
-    # Ручной запуск при старте убран отсюда — стартовая синхронизация
-    # выполняется в startup() в main.py. Здесь только расписание.
+        try:
+            await _run_sync_once()
+        except Exception:
+            logger.exception("💥 Критическая ошибка во время синхронизации")
 
     # Планировщик: каждые 24 часа
     scheduler.add_job(
@@ -48,8 +37,8 @@ def create_scheduler():
         trigger="interval",
         hours=24,
         id="sync_job",
-        replace_existing=True,  # Защита от дублей при перезапуске
-        max_instances=1,        # Только один экземпляр задачи одновременно
+        replace_existing=True,
+        max_instances=1,
     )
 
     logger.info("🕒 Планировщик настроен: интервал 24 часа, max_instances=1")

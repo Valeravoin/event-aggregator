@@ -21,8 +21,8 @@ def _build_database_url() -> str | None:
     if not url or "localhost" in url:
         conn = os.getenv("POSTGRES_CONNECTION_STRING", "")
         if conn:
-            # SQLAlchemy 2.x требует postgresql+psycopg2://, платформа даёт postgres://
-            return conn.replace("postgres://", "postgresql+psycopg2://", 1)
+            # SQLAlchemy async требует драйвер psycopg 3: postgresql+psycopg://
+            return conn.replace("postgres://", "postgresql+psycopg://", 1)
 
         user = os.getenv("POSTGRES_USERNAME", "")
         host = os.getenv("POSTGRES_HOST", "")
@@ -30,7 +30,7 @@ def _build_database_url() -> str | None:
         if host and name:
             pwd = quote_plus(os.getenv("POSTGRES_PASSWORD", ""))
             port = os.getenv("POSTGRES_PORT", "5432")
-            return f"postgresql+psycopg2://{user}:{pwd}@{host}:{port}/{name}"
+            return f"postgresql+psycopg://{user}:{pwd}@{host}:{port}/{name}"
 
     return url or None
 

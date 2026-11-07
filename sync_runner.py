@@ -2,9 +2,8 @@ import logging
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from http_client import EventsApiClient
 from models import Event, SyncMetadata, SyncStatus
@@ -53,9 +52,9 @@ def _get_changed_at(sync_record: SyncMetadata) -> str:
     return FULL_SYNC_FROM
 
 
-def get_or_create_sync_record(db: Session, source_name: str) -> SyncMetadata:
+async def get_or_create_sync_record(db: AsyncSession, source_name: str) -> SyncMetadata:
     stmt = select(SyncMetadata).where(SyncMetadata.source_name == source_name)
-    record = db.execute(stmt).scalars().first()
+    record = (await db.execute(stmt)).scalars().first()
 
     if not record:
         logger.info("🆕 Создаю запись синхронизации для источника: %s", source_name)
@@ -67,23 +66,22 @@ def get_or_create_sync_record(db: Session, source_name: str) -> SyncMetadata:
             last_sync_time=None,
         )
         db.add(record)
-        db.commit()
-        db.refresh(record)
+        await db.commit()
+        await db.refresh(record)
 
     return record
 
 
-def _fetch_event(db: Session, event_id: UUID) -> Event | None:
+async def _fetch_event(db: AsyncSession, event_id: UUID) -> Event | None:
     stmt = select(Event).where(Event.id == event_id)
-    return db.execute(stmt).scalars().first()
+    return (await db.execute(stmt)).scalars().first()
 
 
-async def run_sync(db: Session, source_name: str = "scheduled-source") -> bool:
+async def run_sync(db: AsyncSession, source_name: str = "scheduled-source") -> bool:
     logger.info("🚀 Начало синхронизации для источника: %s", source_name)
 
     try:
-        # Блокирующие обращения к БД — только через пул потоков
-        sync_record = await run_in_threadpool(get_or_create_sync_record, db, source_name)
+        sync_record = await get_or_create_sync_record(db, source_name)
 
         # Защита от повторного запуска + восстановление после залипания:
         # если статус 'running' висит дольше 10 минут — предыдущий запуск умер,
@@ -96,10 +94,9 @@ async def run_sync(db: Session, source_name: str = "scheduled-source") -> bool:
                 return False
             logger.warning("🔧 Найден залипший статус 'running' — перезапускаю синхронизацию")
 
-        # Мутации атрибутов — в памяти, блокируют только commit/execute
         sync_record.sync_status = "running"
         sync_record.last_sync_time = datetime.now(UTC)
-        await run_in_threadpool(db.commit)
+        await db.commit()
 
         client = EventsApiClient()
 
@@ -129,7 +126,7 @@ async def run_sync(db: Session, source_name: str = "scheduled-source") -> bool:
             if item_changed_at and (max_changed_at is None or item_changed_at > max_changed_at):
                 max_changed_at = item_changed_at
 
-            existing_event = await run_in_threadpool(_fetch_event, db, event_id)
+            existing_event = await _fetch_event(db, event_id)
 
             fields = dict(
                 name=event_item.get("name"),
@@ -159,7 +156,7 @@ async def run_sync(db: Session, source_name: str = "scheduled-source") -> bool:
                 )
                 processed_count += 1
 
-        await run_in_threadpool(db.commit)
+        await db.commit()
 
         sync_record.events_processed = (
             (sync_record.events_processed or 0) + processed_count + updated_count
@@ -168,11 +165,12 @@ async def run_sync(db: Session, source_name: str = "scheduled-source") -> bool:
         if max_changed_at:
             sync_record.last_event_time = max_changed_at
         sync_record.sync_status = SyncStatus.IDLE.value
-        await run_in_threadpool(db.commit)
+        await db.commit()
 
         logger.info(
             "✅ Синхронизация завершена. Новых: %d, Обновлено: %d",
-            processed_count, updated_count,
+            processed_count,
+            updated_count,
         )
         return True
 
@@ -182,7 +180,7 @@ async def run_sync(db: Session, source_name: str = "scheduled-source") -> bool:
             if "sync_record" in locals() and sync_record is not None:
                 sync_record.sync_status = "failed"
                 sync_record.last_sync_time = datetime.now(UTC)
-                await run_in_threadpool(db.commit)
+                await db.commit()
         except Exception:
             logger.exception("💥 Не удалось обновить статус синхронизации в БД")
         return False

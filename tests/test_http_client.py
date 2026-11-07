@@ -38,6 +38,7 @@ async def _drain(paginator):
 
 # --- EventsApiClient ---
 
+
 def test_register_ticket_sends_post_with_payload(client):
     mock_request = AsyncMock(return_value=_response(201, {"ticket_id": "t-1"}))
     client.client.request = mock_request
@@ -97,11 +98,15 @@ def test_client_requires_api_key(monkeypatch):
 
 # --- EventsPaginator ---
 
+
 def test_paginator_walks_all_pages(monkeypatch):
-    client = _make_mocked_client(monkeypatch, [
-        {"results": [{"id": "e1"}], "next": "http://provider.test/api/events/?page=2"},
-        {"results": [{"id": "e2"}], "next": None},
-    ])
+    client = _make_mocked_client(
+        monkeypatch,
+        [
+            {"results": [{"id": "e1"}], "next": "http://provider.test/api/events/?page=2"},
+            {"results": [{"id": "e2"}], "next": None},
+        ],
+    )
 
     events = asyncio.run(client.fetch_all_events(changed_at="2026-01-01"))
 
@@ -116,10 +121,13 @@ def test_paginator_walks_all_pages(monkeypatch):
 
 
 def test_paginator_sync_protocol_over_buffer(monkeypatch):
-    client = _make_mocked_client(monkeypatch, [
-        {"results": [{"id": "a"}], "next": "http://provider.test/api/events/?page=2"},
-        {"results": [{"id": "b"}], "next": None},
-    ])
+    client = _make_mocked_client(
+        monkeypatch,
+        [
+            {"results": [{"id": "a"}], "next": "http://provider.test/api/events/?page=2"},
+            {"results": [{"id": "b"}], "next": None},
+        ],
+    )
     paginator = EventsPaginator(client, "/api/events/", params={"changed_at": "2000-01-01"})
 
     asyncio.run(_drain(paginator))
