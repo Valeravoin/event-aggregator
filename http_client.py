@@ -12,9 +12,7 @@ logger = logging.getLogger(__name__)
 class EventsPaginator:
     """Итератор по страницам провайдера (паттерн Iterator).
 
-    Реальная загрузка асинхронная — используйте ``async for page in paginator:``.
-    Синхронный протокол (__iter__/__next__) отдаёт страницы, уже попавшие
-    в буфер, — удобно для постобработки и юнит-тестов.
+    Загрузка асинхронная — используйте ``async for page in paginator:``.
     """
 
     def __init__(
@@ -24,41 +22,18 @@ class EventsPaginator:
         params: dict[str, Any] | None = None,
     ):
         self._client = client
-        self._first_endpoint = endpoint
-        self._params = params or {}
         self._next_endpoint: str | None = endpoint
-        self._buffer: list[list[dict[str, Any]]] = []
-        self._position = 0
+        self._params = params or {}
 
-    # --- синхронный протокол: поверх уже загруженных страниц ---
-    def __iter__(self) -> "EventsPaginator":
-        self._position = 0
-        return self
-
-    def __next__(self) -> list[dict[str, Any]]:
-        if self._position < len(self._buffer):
-            page = self._buffer[self._position]
-            self._position += 1
-            return page
-        raise StopIteration
-
-    # --- асинхронный протокол: реальная загрузка с провайдера ---
     def __aiter__(self) -> "EventsPaginator":
         return self
 
     async def __anext__(self) -> list[dict[str, Any]]:
-        if self._position >= len(self._buffer):
-            if self._next_endpoint is None:
-                raise StopAsyncIteration
-            page = await self._fetch_page()
-            self._buffer.append(page)
-        page = self._buffer[self._position]
-        self._position += 1
-        return page
+        if self._next_endpoint is None:
+            raise StopAsyncIteration
 
-    async def _fetch_page(self) -> list[dict[str, Any]]:
-        data, error = await self._client._make_request(
-            "GET", self._next_endpoint, params=self._params or None
+        results, next_endpoint, error = await self._client.get_events_page(
+            self._next_endpoint, self._params or None
         )
         # Параметры (например, changed_at) нужны только на первом запросе:
         # дальше query уже зашит в next-URL от провайдера.
@@ -67,18 +42,8 @@ class EventsPaginator:
         if error:
             raise RuntimeError(error)
 
-        if isinstance(data, dict):
-            results = data.get("results") or []
-            next_url = data.get("next")
-        else:
-            logger.warning("📄 Провайдер вернул несловарный ответ: %r", data)
-            results, next_url = [], None
-
-        # next приходит полным URL — отрезаем base_url, оставляем path+query
-        if next_url and next_url.startswith(self._client.base_url):
-            next_url = next_url[len(self._client.base_url) :]
-        self._next_endpoint = next_url
-        return results
+        self._next_endpoint = next_endpoint
+        return results or []
 
 
 class EventsApiClient:
@@ -129,6 +94,31 @@ class EventsApiClient:
         except Exception as e:
             logger.exception("💥 Неожиданная ошибка")
             return None, f"Unexpected error: {e!s}"
+
+    # --- Публичная постраничная загрузка событий ---
+    async def get_events_page(
+        self, endpoint: str, params: dict[str, Any] | None = None
+    ) -> tuple[list[dict[str, Any]] | None, str | None, str | None]:
+        """Возвращает (results, next_endpoint, error).
+
+        next_endpoint — path+query следующей страницы (или None, если страниц
+        больше нет); full URL провайдера уже отрезан до base_url.
+        """
+        data, error = await self._make_request("GET", endpoint, params=params)
+        if error:
+            return None, None, error
+
+        if not isinstance(data, dict):
+            logger.warning("📄 Провайдер вернул несловарный ответ: %r", data)
+            return [], None, None
+
+        results = data.get("results") or []
+        next_url = data.get("next")
+
+        # next приходит полным URL — отрезаем base_url, оставляем path+query
+        if next_url and next_url.startswith(self.base_url):
+            next_url = next_url[len(self.base_url) :]
+        return results, next_url, None
 
     # --- Синхронизация: все события через итератор страниц ---
     async def fetch_all_events(self, changed_at: str = "2000-01-01") -> list[dict[str, Any]]:

@@ -120,23 +120,6 @@ def test_paginator_walks_all_pages(monkeypatch):
     assert second_call.kwargs.get("params") is None
 
 
-def test_paginator_sync_protocol_over_buffer(monkeypatch):
-    client = _make_mocked_client(
-        monkeypatch,
-        [
-            {"results": [{"id": "a"}], "next": "http://provider.test/api/events/?page=2"},
-            {"results": [{"id": "b"}], "next": None},
-        ],
-    )
-    paginator = EventsPaginator(client, "/api/events/", params={"changed_at": "2000-01-01"})
-
-    asyncio.run(_drain(paginator))
-
-    pages = list(paginator)  # __iter__/__next__ поверх загруженного буфера
-    assert pages == [[{"id": "a"}], [{"id": "b"}]]
-    with pytest.raises(StopIteration):
-        next(paginator)
-
 
 def test_paginator_raises_on_provider_error(monkeypatch):
     monkeypatch.setattr(http_client, "EVENTS_PROVIDER_API_KEY", "test-key")

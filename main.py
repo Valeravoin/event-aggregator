@@ -26,7 +26,7 @@ from models import Base
 from repositories.event_repository import EventRepository
 from repositories.registration_repository import RegistrationRepository
 from scheduler import create_scheduler
-from schemas import TicketRequest
+from schemas import EventOut, EventsPage, PlaceOut, TicketRequest
 from services.seats_usecase import SeatsUseCase, seats_cache
 from services.ticket_cancellation_usecase import TicketCancellationUseCase
 from services.ticket_registration_usecase import TicketRegistrationUseCase
@@ -159,8 +159,7 @@ async def trigger_sync(db: AsyncSession = Depends(get_db)):
     return {"status": "failed", "message": "Синхронизация завершилась с ошибкой (см. логи)"}
 
 
-# --- Список событий с пагинацией (контракт: count/next/previous/results) ---
-@app.get("/api/events")
+@app.get("/api/events", response_model=EventsPage)
 async def get_events(
     page: int = 1,
     page_size: int = 10,
@@ -179,40 +178,42 @@ async def get_events(
     repo = EventRepository(db)
     events, total = await repo.list_events(page, size, date_from)
 
-    def _page_url(p: int):
+    def _page_url(p: int) -> str | None:
         if p < 1 or (p - 1) * size >= total:
             return None
-        return f"/api/events?{urlencode({'page': p, 'page_size': size, **({'date_from': date_from.isoformat()} if date_from else {})})}"
+        query = {"page": p, "page_size": size}
+        if date_from:
+            query["date_from"] = date_from.isoformat()
+        return f"/api/events?{urlencode(query)}"
 
-    return {
-        "count": total,
-        "next": _page_url(page + 1),
-        "previous": _page_url(page - 1),
-        "results": [
-            {
-                "id": str(ev.id),
-                "name": ev.name,
-                "place": {
-                    "id": str(ev.place_id) if ev.place_id else None,
-                    "name": ev.place_name,
-                    "city": ev.city,
-                    "address": ev.address,
-                    "seats_pattern": ev.seats_pattern,
-                },
-                "event_time": (ev.event_time.isoformat() if ev.event_time else None),
-                "registration_deadline": (
-                    ev.registration_deadline.isoformat() if ev.registration_deadline else None
-                ),
-                "status": ev.status,
-                "number_of_visitors": ev.number_of_visitors,
-            }
+    return EventsPage(
+        count=total,
+        next=_page_url(page + 1),
+        previous=_page_url(page - 1),
+        results=[
+            EventOut(
+                id=str(ev.id),
+                name=ev.name,
+                place=PlaceOut(
+                    id=str(ev.place_id) if ev.place_id else None,
+                    name=ev.place_name,
+                    city=ev.city,
+                    address=ev.address,
+                    seats_pattern=ev.seats_pattern,
+                ) if ev.place_id else None,
+                event_time=ev.event_time,
+                registration_deadline=ev.registration_deadline,
+                status=ev.status,
+                number_of_visitors=ev.number_of_visitors,
+            )
             for ev in events
         ],
-    }
+    )
+
 
 
 # --- Детали события ---
-@app.get("/api/events/{event_id}")
+@app.get("/api/events/{event_id}", response_model=EventOut)
 async def get_event_details(event_id: UUID, db: AsyncSession = Depends(get_db)):
     repo = EventRepository(db)
     event = await repo.get_by_id(event_id)
@@ -220,27 +221,22 @@ async def get_event_details(event_id: UUID, db: AsyncSession = Depends(get_db)):
     if not event:
         raise HTTPException(status_code=404, detail="Событие не найдено")
 
-    place = None
-    if event.place_id:
-        place = {
-            "id": str(event.place_id),
-            "name": event.place_name,
-            "city": event.city,
-            "address": event.address,
-            "seats_pattern": event.seats_pattern,
-        }
+    return EventOut(
+        id=str(event.id),
+        name=event.name,
+        place=PlaceOut(
+            id=str(event.place_id),
+            name=event.place_name,
+            city=event.city,
+            address=event.address,
+            seats_pattern=event.seats_pattern,
+        ) if event.place_id else None,
+        event_time=event.event_time,
+        registration_deadline=event.registration_deadline,
+        status=event.status,
+        number_of_visitors=event.number_of_visitors,
+    )
 
-    return {
-        "id": str(event.id),
-        "name": event.name,
-        "place": place,
-        "event_time": event.event_time.isoformat() if event.event_time else None,
-        "registration_deadline": (
-            event.registration_deadline.isoformat() if event.registration_deadline else None
-        ),
-        "status": event.status,
-        "number_of_visitors": event.number_of_visitors,
-    }
 
 
 # --- Свободные места (с кэшем) ---
