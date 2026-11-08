@@ -22,9 +22,10 @@ class TicketStatus(str, Enum):
 
 
 class SyncStatus(str, Enum):
-    """Статусы синхронизации с провайдером."""
-
     IDLE = "idle"
+    RUNNING = "running"
+    FAILED = "failed"
+
 
 
 class SyncMetadata(Base):

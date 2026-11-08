@@ -1,4 +1,5 @@
 from datetime import UTC, date, datetime
+from uuid import UUID
 
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,3 +50,24 @@ class EventRepository:
         results = (await self.session.execute(stmt)).scalars().all()
 
         return list(results), total
+
+    async def upsert_many(
+        self, items: list[tuple[UUID, dict, datetime]]
+    ) -> tuple[int, int]:
+        """Создаёт или обновляет события одним коммитом.
+        items: (event_id, fields, changed_at). Возвращает (новых, обновлённых)."""
+        created, updated = 0, 0
+        for event_id, fields, changed_at in items:
+            existing = await self.get_by_id(event_id)
+            if existing:
+                for key, value in fields.items():
+                    setattr(existing, key, value)
+                existing.last_changed_at = changed_at
+                updated += 1
+            else:
+                self.session.add(
+                    Event(id=event_id, last_changed_at=changed_at, **fields)
+                )
+                created += 1
+        await self.session.commit()
+        return created, updated

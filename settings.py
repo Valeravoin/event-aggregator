@@ -44,3 +44,5 @@ EVENTS_PROVIDER_BASE_URL = os.getenv(
 EVENTS_PROVIDER_API_KEY = os.getenv("EVENTS_PROVIDER_API_KEY", "")
 
 DISABLE_STARTUP_SYNC: bool = os.getenv("DISABLE_STARTUP_SYNC", "").lower() in ("1", "true", "yes")
+
+SYNC_SOURCE_NAME = os.getenv("SYNC_SOURCE_NAME", "event-aggregator")

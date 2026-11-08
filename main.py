@@ -40,7 +40,7 @@ try:
 except Exception:
     logger.exception("💥 Не удалось создать EventsApiClient — проверь env на платформе")
 
-scheduler = create_scheduler()
+scheduler = create_scheduler(client)
 
 
 @asynccontextmanager
@@ -66,8 +66,9 @@ async def lifespan(app: FastAPI):
             return
         async with SessionLocal() as db:
             try:
-                if await run_sync(db, source_name="startup-source"):
+                if await run_sync(db, client=client):
                     logger.info("✅ Стартовая синхронизация завершена.")
+
                 else:
                     logger.warning("⚠️ Стартовая синхронизация частично не удалась.")
             except Exception:
@@ -124,7 +125,7 @@ async def health():
 @app.post("/api/sync/trigger")
 async def trigger_sync(db: AsyncSession = Depends(get_db)):
     try:
-        success = await run_sync(db)
+        success = await run_sync(db, client=client)
     except Exception:
         logger.exception("💥 Ошибка при запуске синхронизации")
         success = False
