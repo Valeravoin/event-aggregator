@@ -1,29 +1,26 @@
+import os
 from logging.config import fileConfig
 
-# Твой движок из database.py
-# Это важно: чтобы autogenerate видел твои модели (Event, SyncMetadata, Registration)
-import models  # noqa: F401
+from dotenv import load_dotenv
+from sqlalchemy import pool
+from sqlalchemy.ext.asyncio import create_async_engine
+
 from alembic import context
-from database import engine
+
+# Подключаем Base из твоего проекта
 from models import Base
 
-# this is the Alembic Config object, which provides
-# access to the values within the .ini file in use.
+load_dotenv()  # подхватываем .env так же, как это делает settings.py
+
+
 config = context.config
+fileConfig(config.config_file_name)
 
-# Берём строку подключения из движка — alembic.ini больше не участвует
-config.set_main_option("sqlalchemy.url", str(engine.url))
-
-# Interpret the config file for Python logging.
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
-
-# Указываем метаданные, которые Alembic должен использовать для сравнения
+# Получаем DATABASE_URL из env (как в settings.py)
 target_metadata = Base.metadata
 
-
 def run_migrations_offline() -> None:
-    """Run migrations in 'offline' mode."""
+    """Запускает миграции без подключения к БД (редко используется)."""
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
         url=url,
@@ -31,22 +28,44 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
-
     with context.begin_transaction():
         context.run_migrations()
 
+def get_database_url() -> str:
+    """Строка подключения — из переменной окружения, как в settings.py."""
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        raise RuntimeError(
+            "DATABASE_URL не задан. Экспортируй переменную окружения "
+            "или добавь её в .env перед запуском alembic."
+        )
+    return url
 
-def run_migrations_online() -> None:
-    """Run migrations in 'online' mode."""
-    # Используем тот же engine, что и приложение — без пересборки из конфига
-    with engine.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
 
-        with context.begin_transaction():
-            context.run_migrations()
+async def run_migrations_online() -> None:
+    """Запускает миграции с реальным подключением к БД (наш случай)."""
+    connectable = create_async_engine(
+        get_database_url(),
+        echo=False,
+        poolclass=pool.NullPool,
+    )
+
+
+    async with connectable.connect() as connection:
+        await connection.run_sync(do_run_migrations)
+
+
+def do_run_migrations(connection) -> None:
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+    )
+    with context.begin_transaction():
+        context.run_migrations()
 
 
 if context.is_offline_mode():
     run_migrations_offline()
 else:
-    run_migrations_online()
+    import asyncio
+    asyncio.run(run_migrations_online())

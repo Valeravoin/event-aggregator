@@ -5,11 +5,14 @@ from datetime import date
 from urllib.parse import urlencode
 from uuid import UUID
 
+from alembic.config import Config
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from alembic import command
 from database import SessionLocal, engine, get_db
 from exceptions import (
     DomainError,
@@ -22,7 +25,6 @@ from exceptions import (
     TicketNotFoundError,
 )
 from http_client import EventsApiClient
-from models import Base
 from repositories.event_repository import EventRepository
 from repositories.registration_repository import RegistrationRepository
 from scheduler import create_scheduler
@@ -51,6 +53,41 @@ def _raise_domain_error(exc: DomainError):
     status = DOMAIN_TO_HTTP.get(type(exc), 400)
     raise HTTPException(status_code=status, detail=str(exc))
 
+# --- Миграции Alembic вместо create_all ---
+# Схема БД управляется только миграциями. Если таблицы уже созданы
+# (первый деплой после перехода с create_all, или тесты на SQLite) —
+# помечаем head-миграцию как применённую, иначе применяем миграции.
+
+
+def _tables_already_exist(conn) -> bool:
+    insp = sa_inspect(conn)
+    return insp.has_table("events") and insp.has_table("registrations")
+
+
+async def _apply_migrations() -> None:
+    if engine is None:
+        logger.warning("База не настроена — миграции не применяются")
+        return
+
+    alembic_cfg = Config("alembic.ini")
+
+    async with engine.connect() as conn:
+        already_created = await conn.run_sync(_tables_already_exist)
+
+    if already_created:
+        logger.info("🧷 Схема уже существует — помечаю head-миграцию как применённую")
+        try:
+            await asyncio.to_thread(command.stamp, alembic_cfg, "head")
+        except Exception:
+            # stamp не критичен: схема и так консистентна с моделями
+            logger.exception("Не удалось проставить alembic stamp — продолжаем")
+    else:
+        logger.info("🛠 Применяю миграции Alembic")
+        # to_thread: env.py внутри делает asyncio.run — в рабочем потоке нет
+        # запущенного цикла, конфликтов с event loop FastAPI не будет
+        await asyncio.to_thread(command.upgrade, alembic_cfg, "head")
+
+
 
 # --- ГЛОБАЛЬНЫЙ КЛИЕНТ ---
 # Создаём на уровне модуля, чтобы тесты могли делать patch.object(main.client, ...).
@@ -73,15 +110,21 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 Приложение EventAggregator запущено.")
 
     # 1. Создаём таблицы, если их нет (страховка для платформы без миграций)
+        # 1. Создаём таблицы, если их нет (страховка для платформы без миграций)
     if engine is None:
         logger.warning("База не настроена — таблицы не создаются")
     else:
+            # 1. Схема БД через Alembic (stamp для существующей, upgrade для чистой)
         try:
-            async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
-            logger.info("Таблицы проверены/созданы")
-        except Exception as e:
-            logger.error("Не удалось создать таблицы: %s", e)
+            await _apply_migrations()
+            logger.info("✅ Схема БД в актуальном состоянии (Alembic)")
+        except Exception:
+            logger.exception("Не удалось применить миграции")
+            raise
+
+
+
+
 
         # 2. Стартовая синхронизация в фоне — сервер не ждёт
 

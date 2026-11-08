@@ -1,4 +1,6 @@
 import os
+import sqlalchemy as sa
+
 
 os.environ.setdefault("DISABLE_STARTUP_SYNC", "1")
 
@@ -49,6 +51,11 @@ async def db():
             await session.close()
             async with database.engine.begin() as conn:
                 await conn.run_sync(Base.metadata.drop_all)
+                # alembic_version не входит в Base.metadata — сносим вручную,
+                # иначе следующая миграция посчитает себя применённой и не
+                # пересоздаст таблицы
+                await conn.execute(sa.text("DROP TABLE IF EXISTS alembic_version"))
+
 
 
 @pytest.fixture
