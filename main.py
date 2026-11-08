@@ -196,10 +196,11 @@ async def trigger_sync(db: AsyncSession = Depends(get_db)):
         success = await run_sync(db, client=client)
     except Exception as exc:
         logger.exception("💥 Ошибка при запуске синхронизации")
-        raise HTTPException(status_code=502, detail=f"Синк упал до старта: {type(exc).__name__}")
+        return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
     if success:
         return {"status": "success", "message": "Синхронизация завершена"}
-    raise HTTPException(status_code=502, detail="Синхронизация завершилась с ошибкой (см. логи)")
+    return {"status": "failed", "error": "Синхронизация завершилась с ошибкой, подробности в логах"}
+
 
 
 
