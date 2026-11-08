@@ -199,7 +199,8 @@ async def trigger_sync(db: AsyncSession = Depends(get_db)):
         success = False
     if success:
         return {"status": "success", "message": "Синхронизация завершена"}
-    return {"status": "failed", "message": "Синхронизация завершилась с ошибкой (см. логи)"}
+    raise HTTPException(status_code=502, detail="Синхронизация завершилась с ошибкой (см. логи)")
+
 
 
 @app.get("/api/events", response_model=EventsPage)
