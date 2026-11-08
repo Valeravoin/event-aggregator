@@ -1,6 +1,6 @@
 import os
-import sqlalchemy as sa
 
+import sqlalchemy as sa
 
 os.environ.setdefault("DISABLE_STARTUP_SYNC", "1")
 
