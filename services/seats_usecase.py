@@ -3,7 +3,12 @@ import time
 from typing import Any
 from uuid import UUID
 
-from exceptions import DomainError, EventNotFoundError, ProviderError
+from exceptions import (
+    EventNotFoundError,
+    EventNotPublishedError,
+    ProviderError,
+    ProviderUnavailableError,
+)
 from http_client import EventsApiClient
 from models import EventStatus
 from repositories.event_repository import EventRepository
@@ -59,15 +64,9 @@ class SeatsUseCase:
         if not event:
             raise EventNotFoundError()
         if event.status != EventStatus.PUBLISHED.value:
-            raise DomainError(
-                f"Registration is only available for published events. Status: {event.status}",
-                status_code=403,
-            )
+            raise EventNotPublishedError()
         if self.client is None:
-            raise DomainError(
-                "Provider client is not initialized: check EVENTS_PROVIDER_* env variables",
-                status_code=503,
-            )
+            raise ProviderUnavailableError()
 
         logger.info("🌐 Запрос свободных мест у Events Provider для %s", cache_key)
         seats_data, error = await self.client.get_seats(event_id)

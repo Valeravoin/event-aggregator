@@ -1,6 +1,10 @@
 import logging
 
-from exceptions import DomainError, ProviderError, TicketNotFoundError
+from exceptions import (
+    InternalConsistencyError,
+    ProviderError,
+    TicketNotFoundError,
+)
 from http_client import EventsApiClient
 from models import TicketStatus
 from repositories.event_repository import EventRepository
@@ -39,7 +43,8 @@ class TicketCancellationUseCase:
                 reg.event_id,
                 ticket_id,
             )
-            raise DomainError("Internal error", status_code=500)
+            raise InternalConsistencyError("Internal error")
+
 
         # Провайдер знает только свой ID билета — внешний, полученный при регистрации
         provider_ticket_id = reg.external_ticket_id or ticket_id
@@ -54,5 +59,7 @@ class TicketCancellationUseCase:
         return {
             "success": True,
             "ticket_id": ticket_id,
+            "event_id": str(event.id),
             "message": "Cancellation successful",
         }
+

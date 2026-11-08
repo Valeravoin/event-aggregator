@@ -1,4 +1,9 @@
-from exceptions import DomainError, EventNotFoundError, NoAvailableSeatsError, ProviderError
+from exceptions import (
+    EventNotFoundError,
+    EventNotPublishedError,
+    NoAvailableSeatsError,
+    ProviderError,
+)
 from models import EventStatus
 
 
@@ -14,10 +19,7 @@ class TicketRegistrationUseCase:
             raise EventNotFoundError()
 
         if event.status != EventStatus.PUBLISHED.value:
-            raise DomainError(
-                f"Registration unavailable: event status is {event.status}",
-                status_code=400,
-            )
+            raise EventNotPublishedError()
 
         existing = await self.ticket_repo.find_by_seat_and_event(event_id, seat)
         if existing:
@@ -48,6 +50,7 @@ class TicketRegistrationUseCase:
         return {
             "ticket_id": str(ticket.ticket_id),
             "external_ticket_id": result.get("ticket_id"),
+            "event_id": str(event_id),
             "seat": seat,
             "status": "registered",
         }

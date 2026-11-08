@@ -11,14 +11,23 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import SessionLocal, engine, get_db
-from exceptions import DomainError
+from exceptions import (
+    DomainError,
+    EventNotFoundError,
+    EventNotPublishedError,
+    InternalConsistencyError,
+    NoAvailableSeatsError,
+    ProviderError,
+    ProviderUnavailableError,
+    TicketNotFoundError,
+)
 from http_client import EventsApiClient
 from models import Base
 from repositories.event_repository import EventRepository
 from repositories.registration_repository import RegistrationRepository
 from scheduler import create_scheduler
 from schemas import TicketRequest
-from services.seats_usecase import SeatsUseCase
+from services.seats_usecase import SeatsUseCase, seats_cache
 from services.ticket_cancellation_usecase import TicketCancellationUseCase
 from services.ticket_registration_usecase import TicketRegistrationUseCase
 from settings import DISABLE_STARTUP_SYNC, EVENTS_PROVIDER_BASE_URL
@@ -26,6 +35,22 @@ from sync_runner import run_sync
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
+
+# Сопоставление доменных исключений с HTTP-кодами — только здесь, в presentation
+DOMAIN_TO_HTTP: dict[type[DomainError], int] = {
+    EventNotFoundError: 404,
+    TicketNotFoundError: 404,
+    EventNotPublishedError: 403,
+    NoAvailableSeatsError: 409,
+    ProviderError: 502,
+    ProviderUnavailableError: 503,
+    InternalConsistencyError: 500,
+}
+
+def _raise_domain_error(exc: DomainError):
+    status = DOMAIN_TO_HTTP.get(type(exc), 400)
+    raise HTTPException(status_code=status, detail=str(exc))
+
 
 # --- ГЛОБАЛЬНЫЙ КЛИЕНТ ---
 # Создаём на уровне модуля, чтобы тесты могли делать patch.object(main.client, ...).
@@ -229,7 +254,8 @@ async def get_available_seats(event_id: UUID, db: AsyncSession = Depends(get_db)
     try:
         return await usecase.do(event_id)
     except DomainError as e:
-        raise HTTPException(status_code=e.status_code, detail=e.args[0])
+        _raise_domain_error(e)
+
     except Exception:
         logger.exception("💥 Неожиданная ошибка при получении мест")
         raise HTTPException(status_code=500, detail="Internal Server Error")
@@ -261,9 +287,11 @@ async def register_ticket(ticket: TicketRequest, db: AsyncSession = Depends(get_
             event_id=ticket.event_id,
             seat=ticket.seat,
         )
+        seats_cache.pop(str(result["event_id"]), None)
         return result
+
     except DomainError as e:
-        raise HTTPException(status_code=e.status_code, detail=e.args[0])
+        _raise_domain_error(e)
     except Exception:
         logger.exception("💥 Неожиданная ошибка при регистрации")
         raise HTTPException(status_code=500, detail="Internal Server Error")
@@ -271,7 +299,7 @@ async def register_ticket(ticket: TicketRequest, db: AsyncSession = Depends(get_
 
 # --- Отмена регистрации (через UseCase) ---
 @app.delete("/api/tickets/{ticket_id}")
-async def cancel_ticket(ticket_id: str, db: AsyncSession = Depends(get_db)):
+async def cancel_ticket(ticket_id: UUID, db: AsyncSession = Depends(get_db)):
     if client is None:
         raise HTTPException(
             status_code=503,
@@ -289,9 +317,10 @@ async def cancel_ticket(ticket_id: str, db: AsyncSession = Depends(get_db)):
 
     try:
         result = await usecase.do(ticket_id=ticket_id)
+        seats_cache.pop(str(result["event_id"]), None)
         return result
     except DomainError as e:
-        raise HTTPException(status_code=e.status_code, detail=e.args[0])
+        _raise_domain_error(e)
     except Exception:
         logger.exception("💥 Неожиданная ошибка при отмене тикета")
         raise HTTPException(status_code=500, detail="Internal Server Error")
