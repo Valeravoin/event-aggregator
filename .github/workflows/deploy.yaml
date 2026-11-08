@@ -111,9 +111,11 @@ jobs:
             -d '{"image":"ghcr.io/${{ needs.build.outputs.repo }}:${{ github.sha }}","repository":"${{ github.repository }}"}' \
             https://lms.python-labs.ru/api/deploy-requests)
 
+          echo "===== LMS response ====="
+          cat response.txt
+          echo "========================"
+
           if [ "$HTTP_CODE" != "200" ]; then
             echo "Deployment failed with status code $HTTP_CODE"
-            echo "Response body:"
-            cat response.txt
             exit 1
           fi
